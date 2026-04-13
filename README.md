@@ -229,6 +229,7 @@ AgentHub 当前的产品模型是：
 
 - [ARCHITECTURE.md](/Users/zhangpeng/ai-chat-mvp/ARCHITECTURE.md)
 - [AGENTS.md](/Users/zhangpeng/ai-chat-mvp/AGENTS.md)
+- [MANAGER_MODE.md](/Users/zhangpeng/ai-chat-mvp/MANAGER_MODE.md)
 
 ## 冒烟测试
 
