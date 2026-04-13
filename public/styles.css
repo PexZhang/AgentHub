@@ -37,7 +37,8 @@ body {
   justify-content: center;
   min-height: var(--app-height);
   padding: 16px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 button,
@@ -48,12 +49,9 @@ textarea {
 .shell {
   width: 100%;
   max-width: 980px;
-  min-height: calc(var(--app-height) - 32px);
-  height: calc(var(--app-height) - 32px);
   display: flex;
   flex-direction: column;
   gap: 14px;
-  overflow: hidden;
 }
 
 .panel {
@@ -729,9 +727,10 @@ h2 {
 
 .conversation-panel {
   display: flex;
-  flex: 1 1 0;
+  flex: 0 0 auto;
   flex-direction: column;
-  height: 0;
+  height: calc(var(--app-height) - 32px);
+  max-height: calc(var(--app-height) - 32px);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -746,8 +745,7 @@ h2 {
 
 .message-stage {
   position: relative;
-  flex: 1 1 0;
-  height: 0;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -778,8 +776,7 @@ h2 {
 }
 
 .messages {
-  flex: 1 1 0;
-  height: 0;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   padding: 4px 0 16px;
@@ -1000,8 +997,6 @@ h2 {
   }
 
   .shell {
-    min-height: calc(var(--app-height) - 16px);
-    height: calc(var(--app-height) - 16px);
     gap: 10px;
   }
 
@@ -1086,8 +1081,9 @@ h2 {
   }
 
   .conversation-panel {
-    flex: 1 1 0;
-    height: 0;
+    flex: 0 0 auto;
+    height: calc(var(--app-height) - 16px);
+    max-height: calc(var(--app-height) - 16px);
     min-height: 0;
   }
 
@@ -1096,8 +1092,6 @@ h2 {
   }
 
   .message-stage {
-    flex: 1 1 0;
-    height: 0;
     min-height: 0;
     padding: 0 12px 12px;
   }
@@ -1107,8 +1101,7 @@ h2 {
   }
 
   .messages {
-    flex: 1 1 0;
-    height: 0;
+    flex: 1 1 auto;
     min-height: 220px;
     padding: 4px 0 12px;
   }
