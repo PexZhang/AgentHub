@@ -1,9 +1,10 @@
-const UI_PREFS_KEY = "agenthub-ui-prefs-v1";
+const UI_PREFS_KEY = "agenthub-ui-prefs-v2";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 
 function buildDefaultUiState() {
   return {
     threadsCollapsed: window.matchMedia("(max-width: 720px)").matches,
+    mobileView: "devices",
   };
 }
 
@@ -91,6 +92,7 @@ const state = {
 
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
+const shellNode = document.querySelector(".shell");
 const agentCount = document.querySelector("#agent-count");
 const deviceList = document.querySelector("#device-list");
 const agentList = document.querySelector("#agent-list");
@@ -110,6 +112,7 @@ const sessionPickerModal = document.querySelector("#session-picker-modal");
 const sessionPickerContent = document.querySelector("#session-picker-content");
 const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
+const mobileNav = document.querySelector("#mobile-nav");
 
 const STATUS_LABELS = {
   queued: "排队中",
@@ -123,6 +126,19 @@ const DIRECTORY_REQUEST_TIMEOUT_MS = 4000;
 function updateViewportHeight() {
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
   document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
+}
+
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function setMobileView(view, options = {}) {
+  const nextView = ["devices", "threads", "chat"].includes(view) ? view : "devices";
+  state.ui.mobileView = nextView;
+
+  if (!options.skipPersist) {
+    persistUiState();
+  }
 }
 
 function persistUiState() {
@@ -304,6 +320,25 @@ function getActiveConversation() {
       (conversation) => conversation.id === state.activeConversationId
     ) || null
   );
+}
+
+function ensureMobileView() {
+  if (!["devices", "threads", "chat"].includes(state.ui.mobileView)) {
+    state.ui.mobileView = "devices";
+  }
+
+  if (!isMobileLayout()) {
+    return;
+  }
+
+  if (!state.activeAgentId) {
+    state.ui.mobileView = "devices";
+    return;
+  }
+
+  if (!state.activeConversationId && state.ui.mobileView === "chat") {
+    state.ui.mobileView = "threads";
+  }
 }
 
 function getAgentDefaultWorkdir(agent) {
@@ -657,6 +692,9 @@ function renderDevices() {
   deviceList.querySelectorAll("[data-device-id]").forEach((button) => {
     button.addEventListener("click", () => {
       selectDevice(button.dataset.deviceId);
+      if (isMobileLayout()) {
+        setMobileView("devices");
+      }
       render();
     });
   });
@@ -700,6 +738,9 @@ function renderAgents() {
   agentList.querySelectorAll("[data-agent-id]").forEach((button) => {
     button.addEventListener("click", () => {
       selectAgent(button.dataset.agentId);
+      if (isMobileLayout()) {
+        setMobileView("threads");
+      }
       render();
     });
   });
@@ -712,7 +753,8 @@ function renderThreadStrip(agent) {
   }
 
   const conversations = getConversationsForAgent(agent.id);
-  const collapsed = state.ui.threadsCollapsed;
+  const forceExpanded = isMobileLayout() && state.ui.mobileView === "threads";
+  const collapsed = forceExpanded ? false : state.ui.threadsCollapsed;
   const disabled = !state.connected ? " disabled" : "";
   const activeConversation = getActiveConversation();
   const usesCodex = agentUsesCodex(agent);
@@ -730,7 +772,7 @@ function renderThreadStrip(agent) {
       <button class="section-toggle-button" id="thread-toggle-button" type="button">
         <span class="thread-label">聊天线程</span>
         <span class="section-toggle-meta">${conversations.length} 个</span>
-        <span class="section-toggle-state">${collapsed ? "展开" : "收起"}</span>
+        <span class="section-toggle-state">${forceExpanded ? "线程页" : collapsed ? "展开" : "收起"}</span>
       </button>
       <div class="thread-toolbar-actions">
         ${
@@ -789,9 +831,11 @@ function renderThreadStrip(agent) {
     }
   `;
 
-  threadStrip.querySelector("#thread-toggle-button")?.addEventListener("click", () => {
-    toggleUiPanel("threadsCollapsed");
-  });
+  if (!forceExpanded) {
+    threadStrip.querySelector("#thread-toggle-button")?.addEventListener("click", () => {
+      toggleUiPanel("threadsCollapsed");
+    });
+  }
 
   threadStrip.querySelector("#thread-create-button")?.addEventListener("click", () => {
     if (usesCodex) {
@@ -816,6 +860,9 @@ function renderThreadStrip(agent) {
   threadStrip.querySelectorAll("[data-conversation-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeConversationId = button.dataset.conversationId;
+      if (isMobileLayout()) {
+        setMobileView("chat");
+      }
       render();
     });
   });
@@ -831,6 +878,71 @@ function renderThreadStrip(agent) {
       }
 
       requestDeleteConversation(conversationId);
+    });
+  });
+}
+
+function renderMobileNav() {
+  if (!isMobileLayout()) {
+    mobileNav.hidden = true;
+    mobileNav.innerHTML = "";
+    shellNode.dataset.mobileView = "desktop";
+    return;
+  }
+
+  ensureMobileView();
+  shellNode.dataset.mobileView = state.ui.mobileView;
+
+  const activeAgent = getAgent(state.activeAgentId);
+  const activeConversation = getActiveConversation();
+  const items = [
+    {
+      id: "devices",
+      label: "设备",
+      meta: `${state.devices.length || deriveDevicesFromAgents(state.agents).length} 台设备`,
+      disabled: false,
+    },
+    {
+      id: "threads",
+      label: "线程",
+      meta: activeAgent ? activeAgent.name : "先选数字员工",
+      disabled: !activeAgent,
+    },
+    {
+      id: "chat",
+      label: "聊天",
+      meta: activeConversation?.title || "先选线程",
+      disabled: !activeConversation,
+    },
+  ];
+
+  mobileNav.hidden = false;
+  mobileNav.innerHTML = items
+    .map((item) => {
+      const activeClass = item.id === state.ui.mobileView ? " active" : "";
+      const disabledAttr = item.disabled ? " disabled" : "";
+      return `
+        <button
+          type="button"
+          class="mobile-nav-button${activeClass}"
+          data-mobile-view="${escapeHtml(item.id)}"
+          ${disabledAttr}
+        >
+          <span class="mobile-nav-label">${escapeHtml(item.label)}</span>
+          <span class="mobile-nav-meta">${escapeHtml(item.meta)}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  mobileNav.querySelectorAll("[data-mobile-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) {
+        return;
+      }
+
+      setMobileView(button.dataset.mobileView);
+      render();
     });
   });
 }
@@ -1050,11 +1162,15 @@ function renderMessages() {
     return;
   }
 
-  conversationTitle.textContent = conversation?.title || agent.name;
   const deviceName =
     agent.deviceName || conversation?.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
+  const mobileThreadsView = isMobileLayout() && state.ui.mobileView === "threads";
 
-  if (!agent.online) {
+  conversationTitle.textContent = mobileThreadsView ? agent.name : conversation?.title || agent.name;
+
+  if (mobileThreadsView) {
+    conversationSubtitle.textContent = `设备 ${deviceName} · ${getConversationsForAgent(agent.id).length} 个线程 · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+  } else if (!agent.online) {
     conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递`;
   } else {
     conversationSubtitle.textContent = `已连接 · 设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
@@ -1281,7 +1397,9 @@ function renderConnection() {
 
 function render() {
   ensureActiveSelection();
+  ensureMobileView();
   renderConnection();
+  renderMobileNav();
   renderAgents();
   renderMessages();
   renderDirectoryPicker();
@@ -1362,6 +1480,9 @@ function connect() {
           state.activeDeviceId;
         state.activeConversationId = conversation.id;
         state.pendingConversationId = null;
+        if (isMobileLayout()) {
+          setMobileView("chat", { skipPersist: true });
+        }
         render();
       }
       return;

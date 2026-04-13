@@ -204,7 +204,44 @@ h2 {
 
 .thread-strip {
   min-width: 0;
-  margin-top: 10px;
+  padding: 0 16px 10px;
+}
+
+.mobile-nav {
+  display: none;
+}
+
+.mobile-nav-button {
+  border: 1px solid rgba(130, 180, 219, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.mobile-nav-button.active {
+  border-color: rgba(87, 208, 255, 0.58);
+  background: var(--accent-soft);
+}
+
+.mobile-nav-button:disabled {
+  opacity: 0.48;
+}
+
+.mobile-nav-label,
+.mobile-nav-meta {
+  display: block;
+}
+
+.mobile-nav-label {
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.mobile-nav-meta {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .thread-toolbar,
@@ -1135,6 +1172,10 @@ h2 {
     max-height: min(24vh, 210px);
   }
 
+  .thread-strip {
+    padding: 0 12px 10px;
+  }
+
   .message-stage {
     min-height: 0;
     padding: 0 12px 12px;
@@ -1177,5 +1218,75 @@ h2 {
   .message-jump-button {
     right: 20px;
     bottom: 22px;
+  }
+
+  .mobile-nav {
+    position: sticky;
+    bottom: 8px;
+    z-index: 12;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid rgba(130, 180, 219, 0.14);
+    border-radius: 20px;
+    background: rgba(8, 17, 26, 0.94);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(16px);
+  }
+
+  .shell[data-mobile-view="devices"] .conversation-panel {
+    display: none;
+  }
+
+  .shell[data-mobile-view="threads"] .agents-panel,
+  .shell[data-mobile-view="chat"] .agents-panel {
+    display: none;
+  }
+
+  .shell[data-mobile-view="threads"] .conversation-panel {
+    height: auto;
+    max-height: none;
+    min-height: calc(var(--app-height) - 116px);
+    overflow: hidden;
+  }
+
+  .shell[data-mobile-view="threads"] .conversation-panel > .panel-title-row {
+    max-height: none;
+    padding-bottom: 8px;
+  }
+
+  .shell[data-mobile-view="threads"] .thread-strip {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-bottom: 16px;
+  }
+
+  .shell[data-mobile-view="threads"] .thread-list {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: calc(var(--app-height) - 280px);
+    padding-bottom: 10px;
+  }
+
+  .shell[data-mobile-view="threads"] .thread-card,
+  .shell[data-mobile-view="threads"] .thread-chip {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .shell[data-mobile-view="threads"] .message-stage,
+  .shell[data-mobile-view="threads"] .composer {
+    display: none;
+  }
+
+  .shell[data-mobile-view="chat"] .thread-strip {
+    display: none;
+  }
+
+  .shell[data-mobile-view="chat"] .conversation-panel {
+    height: calc(var(--app-height) - 116px);
+    max-height: calc(var(--app-height) - 116px);
   }
 }
