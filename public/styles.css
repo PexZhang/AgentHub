@@ -169,7 +169,7 @@ h2 {
 
 .thread-strip {
   min-width: 0;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .thread-toolbar,
@@ -177,13 +177,13 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .section-toggle-button {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
   flex-wrap: wrap;
@@ -205,13 +205,13 @@ h2 {
 }
 
 .section-collapsed-summary {
-  margin-top: 10px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 8px 10px;
   border: 1px solid rgba(130, 180, 219, 0.12);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .thread-label,
@@ -226,10 +226,10 @@ h2 {
 .thread-list,
 .session-list {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   max-width: 100%;
-  margin-top: 10px;
+  margin-top: 8px;
   overflow-x: auto;
   padding-bottom: 2px;
 }
@@ -240,8 +240,8 @@ h2 {
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -254,19 +254,19 @@ h2 {
   display: inline-flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .thread-card {
   position: relative;
-  min-width: 182px;
+  min-width: 168px;
 }
 
 .thread-chip {
-  min-width: 182px;
+  min-width: 168px;
   border: 1px solid rgba(130, 180, 219, 0.16);
   border-radius: 18px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   text-align: left;
@@ -274,7 +274,7 @@ h2 {
 
 .thread-chip {
   width: 100%;
-  padding-right: 58px;
+  padding-right: 54px;
 }
 
 .thread-chip.active {
@@ -307,14 +307,14 @@ h2 {
 .thread-chip-title {
   display: block;
   font-weight: 700;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .thread-chip-meta,
 .muted-text {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .muted,
@@ -339,7 +339,7 @@ h2 {
 
 .thread-badge {
   display: inline-flex;
-  margin-top: 8px;
+  margin-top: 6px;
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(87, 208, 255, 0.14);
@@ -739,8 +739,15 @@ h2 {
 .conversation-panel > .panel-title-row {
   flex: 0 0 auto;
   min-height: 0;
-  max-height: min(34vh, 320px);
+  padding: 14px 16px 8px;
+  max-height: min(28vh, 260px);
   overflow-y: auto;
+}
+
+#conversation-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .message-stage {
@@ -758,20 +765,20 @@ h2 {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  max-height: min(18vh, 120px);
+  gap: 6px;
+  max-height: min(14vh, 96px);
   overflow-y: auto;
-  padding: 0 0 10px;
+  padding: 0 0 8px;
 }
 
 .message-toolbar-pill {
   display: inline-flex;
   align-items: center;
-  padding: 5px 10px;
+  padding: 4px 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.2;
 }
 
@@ -1039,15 +1046,15 @@ h2 {
 
   .thread-chip,
   .session-chip {
-    min-width: clamp(148px, 72vw, 168px);
+    min-width: clamp(140px, 68vw, 160px);
   }
 
   .thread-card {
-    min-width: clamp(148px, 72vw, 168px);
+    min-width: clamp(140px, 68vw, 160px);
   }
 
   .thread-chip {
-    padding-right: 54px;
+    padding-right: 50px;
   }
 
   .directory-modal {
@@ -1088,7 +1095,8 @@ h2 {
   }
 
   .conversation-panel > .panel-title-row {
-    max-height: min(30vh, 260px);
+    padding: 12px 12px 6px;
+    max-height: min(24vh, 210px);
   }
 
   .message-stage {
@@ -1097,7 +1105,7 @@ h2 {
   }
 
   .message-toolbar {
-    max-height: min(16vh, 96px);
+    max-height: min(12vh, 72px);
   }
 
   .messages {
