@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <title>AgentHub</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AgentHub</p>
+          <h1>数字员工协作台</h1>
+        </div>
+        <div class="status-dot-row">
+          <span class="status-dot" id="socket-dot"></span>
+          <span id="socket-text">正在连接</span>
+        </div>
+      </header>
+
+      <section class="panel agents-panel">
+        <div class="panel-title-row">
+          <div>
+            <h2>本机数字员工</h2>
+            <p class="muted">这个页面只管理当前这台电脑上的 Agent。</p>
+          </div>
+          <span class="muted" id="agent-count">0 online</span>
+        </div>
+        <div id="agent-list" class="agent-list"></div>
+      </section>
+
+      <section class="panel conversation-panel">
+        <div class="panel-title-row">
+          <div>
+            <h2 id="conversation-title">等待 Agent</h2>
+            <p class="muted" id="conversation-subtitle">
+              选择本机数字员工后，这里会显示它自己的会话和消息
+            </p>
+            <div id="thread-strip" class="thread-strip"></div>
+          </div>
+        </div>
+
+        <div id="message-stage" class="message-stage">
+          <div id="message-toolbar" class="message-toolbar"></div>
+          <div id="messages" class="messages"></div>
+          <button type="button" id="message-jump-button" class="message-jump-button" hidden>
+            回到底部
+          </button>
+        </div>
+
+        <form id="composer" class="composer">
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="输入消息，发给当前选中的数字员工"
+          ></textarea>
+          <button type="submit" id="send-button">发送</button>
+        </form>
+      </section>
+    </div>
+
+    <div id="directory-picker-modal" class="directory-modal" hidden>
+      <div id="directory-picker-content" class="directory-modal-content"></div>
+    </div>
+
+    <div id="session-picker-modal" class="session-modal" hidden>
+      <div id="session-picker-content" class="session-modal-content"></div>
+    </div>
+
+    <div id="auth-modal" class="session-modal" hidden>
+      <div id="auth-modal-content" class="session-modal-content"></div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

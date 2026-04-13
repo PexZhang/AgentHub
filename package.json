@@ -1,0 +1,20 @@
+{
+  "name": "agenthub",
+  "version": "1.0.0",
+  "description": "AgentHub：面向多数字员工协作的控制中枢，连接手机网页、本地 Agent 与 WebSocket Hub",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "agent": "node agent/index.js",
+    "agent:echo": "AGENT_ID=echo-agent AGENT_NAME='Echo Agent' AGENT_MODE=echo node agent/index.js",
+    "agent:codex": "AGENT_ID=codex-agent AGENT_NAME='Codex Agent' AGENT_MODE=codex node agent/index.js",
+    "agent:openai": "AGENT_ID=openai-agent AGENT_NAME='OpenAI Agent' AGENT_MODE=openai node agent/index.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "ws": "^8.18.3"
+  }
+}

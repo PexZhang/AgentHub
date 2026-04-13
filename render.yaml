@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: agenthub
+    runtime: node
+    plan: starter
+    autoDeploy: false
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: agenthub-data
+      mountPath: /data
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.6
+      - key: DATA_FILE
+        value: /data/state.json
+      - key: APP_TOKEN
+        generateValue: true
+      - key: AGENT_TOKEN
+        generateValue: true
