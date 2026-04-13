@@ -49,8 +49,10 @@ function loadUiState() {
 const state = {
   connected: false,
   socket: null,
+  devices: [],
   agents: [],
   conversations: [],
+  activeDeviceId: null,
   activeAgentId: null,
   activeConversationId: null,
   pendingConversationId: null,
@@ -90,6 +92,7 @@ const state = {
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const agentCount = document.querySelector("#agent-count");
+const deviceList = document.querySelector("#device-list");
 const agentList = document.querySelector("#agent-list");
 const conversationTitle = document.querySelector("#conversation-title");
 const conversationSubtitle = document.querySelector("#conversation-subtitle");
@@ -232,6 +235,56 @@ function getAgent(agentId) {
   return state.agents.find((agent) => agent.id === agentId) || null;
 }
 
+function getDevice(deviceId) {
+  return state.devices.find((device) => device.id === deviceId) || null;
+}
+
+function deriveDevicesFromAgents(agents) {
+  const deviceMap = new Map();
+
+  for (const agent of agents || []) {
+    const deviceId = String(agent.deviceId || "default-device");
+    const current = deviceMap.get(deviceId) || {
+      id: deviceId,
+      name: String(agent.deviceName || "当前设备"),
+      online: false,
+      agentCount: 0,
+      onlineAgentCount: 0,
+      lastSeenAt: null,
+    };
+
+    current.agentCount += 1;
+    if (agent.online) {
+      current.online = true;
+      current.onlineAgentCount += 1;
+    }
+
+    if (!current.lastSeenAt || new Date(agent.lastSeenAt || 0) > new Date(current.lastSeenAt || 0)) {
+      current.lastSeenAt = agent.lastSeenAt || current.lastSeenAt;
+    }
+
+    deviceMap.set(deviceId, current);
+  }
+
+  return [...deviceMap.values()].sort((left, right) => {
+    if (left.online !== right.online) {
+      return left.online ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
+
+function getAgentsForDevice(deviceId) {
+  return state.agents
+    .filter((agent) => !deviceId || agent.deviceId === deviceId)
+    .sort((left, right) => {
+      if (left.online !== right.online) {
+        return left.online ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+}
+
 function getConversationsForAgent(agentId) {
   return state.conversations
     .filter((conversation) => conversation.agentId === agentId)
@@ -303,9 +356,22 @@ function openSessionPicker(agentId) {
   renderSessionPicker();
 }
 
+function selectDevice(deviceId) {
+  state.pendingConversationId = null;
+  state.activeDeviceId = deviceId;
+  const agents = getAgentsForDevice(deviceId);
+  const activeAgentInDevice = agents.some((agent) => agent.id === state.activeAgentId);
+
+  if (!activeAgentInDevice) {
+    state.activeAgentId = agents[0]?.id || null;
+    state.activeConversationId = null;
+  }
+}
+
 function selectAgent(agentId) {
   state.pendingConversationId = null;
   state.activeAgentId = agentId;
+  state.activeDeviceId = getAgent(agentId)?.deviceId || state.activeDeviceId;
   const conversations = getConversationsForAgent(agentId);
   const hasActiveConversation = conversations.some(
     (conversation) => conversation.id === state.activeConversationId
@@ -325,6 +391,10 @@ function ensureActiveSelection() {
     if (pendingConversation) {
       state.activeConversationId = pendingConversation.id;
       state.activeAgentId = pendingConversation.agentId;
+      state.activeDeviceId =
+        getAgent(pendingConversation.agentId)?.deviceId ||
+        pendingConversation.deviceId ||
+        state.activeDeviceId;
       state.pendingConversationId = null;
       return;
     }
@@ -335,12 +405,18 @@ function ensureActiveSelection() {
   const activeConversation = getActiveConversation();
   if (activeConversation) {
     state.activeAgentId = activeConversation.agentId;
+    state.activeDeviceId =
+      getAgent(activeConversation.agentId)?.deviceId ||
+      activeConversation.deviceId ||
+      state.activeDeviceId;
   }
 
   if (
     state.activeAgentId &&
     state.agents.some((agent) => agent.id === state.activeAgentId)
   ) {
+    state.activeDeviceId =
+      getAgent(state.activeAgentId)?.deviceId || state.activeDeviceId;
     const conversations = getConversationsForAgent(state.activeAgentId);
     if (
       state.activeConversationId &&
@@ -353,8 +429,35 @@ function ensureActiveSelection() {
     return;
   }
 
-  const onlineAgent = state.agents.find((agent) => agent.online);
-  const fallbackAgent = onlineAgent?.id || state.agents[0]?.id || null;
+  if (
+    state.activeDeviceId &&
+    state.devices.some((device) => device.id === state.activeDeviceId)
+  ) {
+    const deviceAgents = getAgentsForDevice(state.activeDeviceId);
+    if (deviceAgents[0]) {
+      selectAgent(deviceAgents[0].id);
+      return;
+    }
+  }
+
+  const onlineDevice = state.devices.find((device) => device.online);
+  const fallbackDevice = onlineDevice?.id || state.devices[0]?.id || null;
+  if (!fallbackDevice) {
+    const onlineAgent = state.agents.find((agent) => agent.online);
+    const fallbackAgent = onlineAgent?.id || state.agents[0]?.id || null;
+    if (!fallbackAgent) {
+      state.activeDeviceId = null;
+      state.activeAgentId = null;
+      state.activeConversationId = null;
+      return;
+    }
+
+    selectAgent(fallbackAgent);
+    return;
+  }
+
+  state.activeDeviceId = fallbackDevice;
+  const fallbackAgent = getAgentsForDevice(fallbackDevice)[0]?.id || null;
   if (!fallbackAgent) {
     state.activeAgentId = null;
     state.activeConversationId = null;
@@ -529,16 +632,57 @@ function handleDirectoryList(payload) {
   renderDirectoryPicker();
 }
 
+function renderDevices() {
+  const devices = state.devices.length > 0 ? state.devices : deriveDevicesFromAgents(state.agents);
+
+  if (devices.length === 0) {
+    deviceList.innerHTML = "";
+    return;
+  }
+
+  deviceList.innerHTML = devices
+    .map((device) => {
+      const activeClass = device.id === state.activeDeviceId ? " active" : "";
+      return `
+        <button class="device-chip${activeClass}" data-device-id="${escapeHtml(device.id)}" type="button">
+          <span class="device-chip-title">${escapeHtml(device.name)}</span>
+          <span class="device-chip-meta">
+            ${device.online ? "在线" : "离线"} · ${device.onlineAgentCount || 0}/${device.agentCount || 0} 个数字员工
+          </span>
+        </button>
+      `;
+    })
+    .join("");
+
+  deviceList.querySelectorAll("[data-device-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectDevice(button.dataset.deviceId);
+      render();
+    });
+  });
+}
+
 function renderAgents() {
-  agentCount.textContent = `${state.agents.filter((agent) => agent.online).length} online`;
+  const visibleAgents = getAgentsForDevice(state.activeDeviceId);
+  const onlineAgentCount = state.agents.filter((agent) => agent.online).length;
+  agentCount.textContent = `${state.devices.length || deriveDevicesFromAgents(state.agents).length} 台设备 · ${onlineAgentCount} 个在线数字员工`;
 
   if (state.agents.length === 0) {
+    deviceList.innerHTML = "";
     agentList.innerHTML =
       '<div class="empty-card">还没有 Agent 连上来。先运行本地 Agent，再从手机打开这个页面。</div>';
     return;
   }
 
-  agentList.innerHTML = state.agents
+  renderDevices();
+
+  if (visibleAgents.length === 0) {
+    agentList.innerHTML =
+      '<div class="empty-card">这台设备下还没有数字员工。连上第二台电脑后，这里会显示它的 Agent。</div>';
+    return;
+  }
+
+  agentList.innerHTML = visibleAgents
     .map((agent) => {
       const activeClass = agent.id === state.activeAgentId ? " active" : "";
       const offlineClass = agent.online ? "" : " offline";
@@ -546,7 +690,7 @@ function renderAgents() {
         <button class="agent-chip${activeClass}${offlineClass}" data-agent-id="${escapeHtml(agent.id)}">
           <span class="agent-chip-title">${escapeHtml(agent.name)}</span>
           <span class="agent-chip-meta">
-            ${agent.online ? "在线" : "离线"} · 运行时 ${escapeHtml(getRuntimeLabel(agent))}
+            ${agent.online ? "在线" : "离线"} · ${escapeHtml(agent.deviceName || "当前设备")} · 运行时 ${escapeHtml(getRuntimeLabel(agent))}
           </span>
         </button>
       `;
@@ -768,6 +912,7 @@ function renderMessageToolbar(agent, conversation) {
     ? "正在查看历史消息"
     : "跟随最新消息";
   const pills = [
+    `设备 ${(agent && (agent.deviceName || getDevice(agent.deviceId)?.name)) || "未选择"}`,
     `运行时 ${getRuntimeLabel(agent)}`,
     `消息 ${messageCount} 条`,
     lastMessage ? `最近更新 ${formatUpdatedAt(lastMessage.createdAt)}` : "等待第一条消息",
@@ -894,7 +1039,7 @@ function renderMessages() {
 
   if (!state.activeAgentId || !agent) {
     conversationTitle.textContent = "等待 Agent";
-    conversationSubtitle.textContent = "启动本机数字员工后，这里会显示它自己的会话和消息";
+    conversationSubtitle.textContent = "先连接设备，再选择这台设备上的数字员工。";
     renderThreadStrip(null);
     renderMessageToolbar(null, null);
     messagesNode.innerHTML =
@@ -906,11 +1051,13 @@ function renderMessages() {
   }
 
   conversationTitle.textContent = conversation?.title || agent.name;
+  const deviceName =
+    agent.deviceName || conversation?.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
 
   if (!agent.online) {
-    conversationSubtitle.textContent = "当前数字员工离线，新消息会先排队，等它重新连接后再投递";
+    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递`;
   } else {
-    conversationSubtitle.textContent = `已连接 · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+    conversationSubtitle.textContent = `已连接 · 设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
   }
 
   renderThreadStrip(agent);
@@ -1195,6 +1342,7 @@ function connect() {
       state.auth.promptOpen = false;
       state.auth.blocked = false;
       state.auth.error = "";
+      state.devices = payload.data.devices || deriveDevicesFromAgents(payload.data.agents || []);
       state.agents = payload.data.agents || [];
       state.conversations = payload.data.conversations || [];
       render();
@@ -1208,6 +1356,10 @@ function connect() {
       );
       if (conversation) {
         state.activeAgentId = conversation.agentId;
+        state.activeDeviceId =
+          getAgent(conversation.agentId)?.deviceId ||
+          conversation.deviceId ||
+          state.activeDeviceId;
         state.activeConversationId = conversation.id;
         state.pendingConversationId = null;
         render();

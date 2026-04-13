@@ -5,12 +5,18 @@ import { promises as fs } from "fs";
 import { join, resolve, sep } from "path";
 import os from "os";
 
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
 const HUB_ORIGIN = process.env.HUB_ORIGIN || "http://localhost:3000";
 const HUB_WS_URL = HUB_ORIGIN.replace(/^http/, "ws") + "/ws";
 const AGENT_ID = process.env.AGENT_ID || "local-ai";
 const AGENT_NAME = process.env.AGENT_NAME || "Digital Employee";
 const AGENT_MODE = process.env.AGENT_MODE || "echo";
 const AGENT_TOKEN = process.env.AGENT_TOKEN || "";
+const DEVICE_ID = normalizeText(process.env.DEVICE_ID) || os.hostname();
+const DEVICE_NAME = normalizeText(process.env.DEVICE_NAME) || DEVICE_ID;
 const AGENT_PROMPT =
   process.env.AGENT_PROMPT ||
   "你是 AgentHub 里的一个数字员工，要用简洁、可靠、可执行的方式帮助用户推进任务。";
@@ -392,6 +398,8 @@ function connect() {
       role: "agent",
       agentId: AGENT_ID,
       name: AGENT_NAME,
+      deviceId: DEVICE_ID,
+      deviceName: DEVICE_NAME,
       mode: currentMode,
       token: AGENT_TOKEN,
       recentCodexSessions,

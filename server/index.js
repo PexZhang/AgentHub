@@ -21,6 +21,14 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function normalizeDeviceId(value, fallback = "default-device") {
+  return normalizeText(value) || fallback;
+}
+
+function normalizeDeviceName(value, fallback = "当前设备") {
+  return normalizeText(value) || fallback;
+}
+
 function isExpectedToken(expectedToken, actualToken) {
   if (!expectedToken) {
     return true;
@@ -164,6 +172,8 @@ class JsonStore {
       title,
       createdAt: now,
       updatedAt: now,
+      deviceId: normalizeText(options.deviceId) || null,
+      deviceName: normalizeText(options.deviceName) || null,
       codexWorkdir: normalizeText(options.codexWorkdir) || null,
       codexSessionId: normalizeText(options.codexSessionId) || null,
       codexThreadName: normalizeText(options.codexThreadName) || null,
@@ -282,9 +292,20 @@ class JsonStore {
         const agentConversations = clonedConversations.filter(
           (conversation) => conversation.agentId === agentId
         );
+        const recentConversation = agentConversations[0] || null;
+        const deviceId = normalizeDeviceId(
+          connection?.deviceId || recentConversation?.deviceId,
+          "default-device"
+        );
+        const deviceName = normalizeDeviceName(
+          connection?.deviceName || recentConversation?.deviceName,
+          "当前设备"
+        );
         return {
           id: agentId,
           name: connection?.name || agentId,
+          deviceId,
+          deviceName,
           mode: connection?.mode || inferAgentModeFromConversations(agentConversations),
           recentCodexSessions: connection?.recentCodexSessions || [],
           defaultCodexWorkdir: connection?.defaultCodexWorkdir || null,
@@ -300,10 +321,42 @@ class JsonStore {
         return left.name.localeCompare(right.name);
       });
 
+    const deviceMap = new Map();
+    for (const agent of agents) {
+      const current = deviceMap.get(agent.deviceId) || {
+        id: agent.deviceId,
+        name: agent.deviceName,
+        online: false,
+        agentCount: 0,
+        onlineAgentCount: 0,
+        lastSeenAt: null,
+      };
+
+      current.agentCount += 1;
+      if (agent.online) {
+        current.online = true;
+        current.onlineAgentCount += 1;
+      }
+
+      if (!current.lastSeenAt || new Date(agent.lastSeenAt || 0) > new Date(current.lastSeenAt || 0)) {
+        current.lastSeenAt = agent.lastSeenAt || current.lastSeenAt;
+      }
+
+      deviceMap.set(agent.deviceId, current);
+    }
+
+    const devices = [...deviceMap.values()].sort((left, right) => {
+      if (left.online !== right.online) {
+        return left.online ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
     return {
       generatedAt: new Date().toISOString(),
       conversations: clonedConversations,
       agents,
+      devices,
     };
   }
 }
@@ -463,6 +516,8 @@ wss.on("connection", (socket) => {
         agentClients.set(agentId, {
           socket,
           name: payload.name || agentId,
+          deviceId: normalizeDeviceId(payload.deviceId),
+          deviceName: normalizeDeviceName(payload.deviceName),
           mode: payload.mode || "echo",
           recentCodexSessions: normalizeCodexSessions(payload.recentCodexSessions),
           defaultCodexWorkdir: normalizeText(payload.defaultCodexWorkdir) || null,
@@ -494,6 +549,7 @@ wss.on("connection", (socket) => {
 
       if (payload.type === "create_conversation" && socket.clientRole === "app") {
         const agentId = normalizeText(payload.agentId);
+        const agentConnection = agentClients.get(agentId);
         if (!agentId) {
           sendJson(socket, { type: "error", message: "创建会话需要 agentId" });
           return;
@@ -507,6 +563,8 @@ wss.on("connection", (socket) => {
         if (!conversation) {
           conversation = await store.createConversation(agentId, {
             title: normalizeText(payload.title),
+            deviceId: agentConnection?.deviceId || null,
+            deviceName: agentConnection?.deviceName || null,
             codexWorkdir: normalizeText(payload.codexWorkdir),
             codexSessionId,
             codexThreadName: normalizeText(payload.codexThreadName),
@@ -525,6 +583,7 @@ wss.on("connection", (socket) => {
       if (payload.type === "open_codex_session" && socket.clientRole === "app") {
         const agentId = normalizeText(payload.agentId);
         const codexSessionId = normalizeText(payload.codexSessionId);
+        const agentConnection = agentClients.get(agentId);
 
         if (!agentId || !codexSessionId) {
           sendJson(socket, {
@@ -538,6 +597,8 @@ wss.on("connection", (socket) => {
 
         if (!conversation) {
           conversation = await store.createConversation(agentId, {
+            deviceId: agentConnection?.deviceId || null,
+            deviceName: agentConnection?.deviceName || null,
             codexWorkdir: normalizeText(payload.codexWorkdir),
             codexSessionId,
             codexThreadName: normalizeText(payload.codexThreadName),
@@ -610,6 +671,8 @@ wss.on("connection", (socket) => {
           agentId = conversation.agentId;
         }
 
+        const agentConnection = agentId ? agentClients.get(agentId) : null;
+
         if (!text || !agentId) {
           sendJson(socket, {
             type: "error",
@@ -621,6 +684,8 @@ wss.on("connection", (socket) => {
         if (!conversation) {
           conversation = await store.createConversation(agentId, {
             title: buildConversationTitle(text, "New chat"),
+            deviceId: agentConnection?.deviceId || null,
+            deviceName: agentConnection?.deviceName || null,
           });
         } else if (
           conversation.messages.length === 0 &&
@@ -629,6 +694,14 @@ wss.on("connection", (socket) => {
         ) {
           conversation = await store.updateConversation(conversation.id, {
             title: buildConversationTitle(text, "New chat"),
+          });
+        } else if (
+          agentConnection &&
+          (!conversation.deviceId || !conversation.deviceName)
+        ) {
+          conversation = await store.updateConversation(conversation.id, {
+            deviceId: agentConnection.deviceId,
+            deviceName: agentConnection.deviceName,
           });
         }
 

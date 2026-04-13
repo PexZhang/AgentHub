@@ -115,6 +115,7 @@ h2 {
   padding-bottom: 16px;
 }
 
+.device-list,
 .agent-list {
   display: flex;
   gap: 10px;
@@ -122,6 +123,40 @@ h2 {
   max-width: 100%;
   padding: 0 16px;
   overflow-x: auto;
+}
+
+.agent-list {
+  margin-top: 10px;
+}
+
+.device-chip {
+  min-width: 168px;
+  border: 1px solid rgba(130, 180, 219, 0.16);
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+}
+
+.device-chip.active {
+  border-color: rgba(87, 208, 255, 0.58);
+  background: var(--accent-soft);
+}
+
+.device-chip-title,
+.device-chip-meta {
+  display: block;
+}
+
+.device-chip-title {
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.device-chip-meta {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .agent-chip {
@@ -1025,6 +1060,7 @@ h2 {
     padding: 0 12px;
   }
 
+  .device-chip,
   .agent-chip {
     min-width: 138px;
     padding: 12px;
