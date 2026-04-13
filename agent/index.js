@@ -378,7 +378,10 @@ async function buildReply(conversation, message) {
 }
 
 function connect() {
-  const ws = new WebSocket(HUB_WS_URL);
+  // On macOS with system-wide proxy tooling enabled, the default HTTP/WebSocket
+  // agent can be hijacked by local proxy software and cause EBADF on outbound
+  // Hub connections. We want the local Agent to dial the Hub directly.
+  const ws = new WebSocket(HUB_WS_URL, { agent: false });
 
   ws.on("open", async () => {
     authFailed = false;

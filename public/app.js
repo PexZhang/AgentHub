@@ -117,6 +117,11 @@ const STATUS_LABELS = {
 };
 const DIRECTORY_REQUEST_TIMEOUT_MS = 4000;
 
+function updateViewportHeight() {
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
+}
+
 function persistUiState() {
   try {
     window.localStorage.setItem(UI_PREFS_KEY, JSON.stringify(state.ui));
@@ -1266,5 +1271,11 @@ messagesNode.addEventListener("scroll", () => {
 messageJumpButton.addEventListener("click", () => {
   scrollMessagesToBottom();
 });
+
+updateViewportHeight();
+window.addEventListener("resize", updateViewportHeight);
+window.addEventListener("orientationchange", updateViewportHeight);
+window.visualViewport?.addEventListener("resize", updateViewportHeight);
+window.visualViewport?.addEventListener("scroll", updateViewportHeight);
 
 connect();
