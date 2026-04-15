@@ -27,53 +27,57 @@
         </div>
       </header>
 
-      <section class="panel agents-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2>员工与设备</h2>
-            <p class="muted">先选设备，再选员工，然后进入对应直连会话。</p>
+      <main class="direct-layout">
+        <section class="panel agents-panel">
+          <div class="panel-title-row">
+            <div>
+              <h2>员工与设备</h2>
+              <p class="muted" id="agents-subtitle">先选设备，再选员工，然后进入对应直连会话。</p>
+            </div>
+            <div class="agents-panel-actions">
+              <span class="muted" id="agent-count">0 online</span>
+              <button type="button" class="session-action-button" id="agents-toggle-button">
+                展开
+              </button>
+            </div>
           </div>
-          <div class="agents-panel-actions">
-            <span class="muted" id="agent-count">0 online</span>
-            <button type="button" class="session-action-button" id="agents-toggle-button">
-              展开
+          <div id="agents-collapsed-summary" class="section-collapsed-summary" hidden></div>
+          <div id="agents-panel-body" class="agents-panel-body">
+            <div id="device-list" class="device-list"></div>
+            <div id="agent-list" class="agent-list"></div>
+          </div>
+        </section>
+
+        <section class="panel conversation-panel">
+          <div class="panel-title-row">
+            <div>
+              <h2 id="conversation-title">等待直连员工</h2>
+              <p class="muted" id="conversation-subtitle">
+                AI经理 会在需要时把你切到这里，直接和某位数字员工对话。
+              </p>
+            </div>
+          </div>
+
+          <div id="thread-strip" class="thread-strip"></div>
+
+          <div id="message-stage" class="message-stage">
+            <div id="message-toolbar" class="message-toolbar"></div>
+            <div id="messages" class="messages"></div>
+            <button type="button" id="message-jump-button" class="message-jump-button" hidden>
+              回到底部
             </button>
           </div>
-        </div>
-        <div id="agents-collapsed-summary" class="section-collapsed-summary" hidden></div>
-        <div id="device-list" class="device-list"></div>
-        <div id="agent-list" class="agent-list"></div>
-      </section>
 
-      <section class="panel conversation-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2 id="conversation-title">等待直连员工</h2>
-            <p class="muted" id="conversation-subtitle">
-              AI经理 会在需要时把你切到这里，直接和某位数字员工对话。
-            </p>
-          </div>
-        </div>
-
-        <div id="thread-strip" class="thread-strip"></div>
-
-        <div id="message-stage" class="message-stage">
-          <div id="message-toolbar" class="message-toolbar"></div>
-          <div id="messages" class="messages"></div>
-          <button type="button" id="message-jump-button" class="message-jump-button" hidden>
-            回到底部
-          </button>
-        </div>
-
-        <form id="composer" class="composer">
-          <textarea
-            id="message-input"
-            rows="1"
-            placeholder="输入消息，直接发给当前选中的数字员工"
-          ></textarea>
-          <button type="submit" id="send-button">发送</button>
-        </form>
-      </section>
+          <form id="composer" class="composer">
+            <textarea
+              id="message-input"
+              rows="1"
+              placeholder="输入消息，直接发给当前选中的数字员工"
+            ></textarea>
+            <button type="submit" id="send-button">发送</button>
+          </form>
+        </section>
+      </main>
 
       <nav id="mobile-nav" class="mobile-nav" hidden></nav>
     </div>

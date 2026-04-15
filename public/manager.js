@@ -53,8 +53,12 @@ const state = {
 
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
+const managerTopbar = document.querySelector("#manager-topbar");
 const managerSubtitle = document.querySelector("#manager-subtitle");
-const managerContextToggleButton = document.querySelector("#manager-context-toggle-button");
+const managerContextBody = document.querySelector("#manager-context-body");
+const managerCollapsedBar = document.querySelector("#manager-context-collapsed-bar");
+const managerContextExpandButton = document.querySelector("#manager-context-expand-button");
+const managerContextCollapseButton = document.querySelector("#manager-context-collapse-button");
 const managerCollapsedSummary = document.querySelector("#manager-collapsed-summary");
 const managerStatusStrip = document.querySelector("#manager-status-strip");
 const managerMessagesNode = document.querySelector("#manager-messages");
@@ -458,26 +462,21 @@ function renderManagerPanel() {
       .join("");
   }
 
-  if (managerContextToggleButton) {
-    managerContextToggleButton.textContent = state.ui.contextCollapsed ? "展开" : "收起";
-    managerContextToggleButton.setAttribute(
-      "aria-label",
-      state.ui.contextCollapsed ? "展开顶部内容" : "收起顶部内容"
-    );
+  if (managerTopbar) {
+    managerTopbar.hidden = state.ui.contextCollapsed;
+  }
+
+  if (managerContextBody) {
+    managerContextBody.hidden = state.ui.contextCollapsed;
+  }
+
+  if (managerCollapsedBar) {
+    managerCollapsedBar.hidden = !state.ui.contextCollapsed;
   }
 
   if (managerCollapsedSummary) {
-    managerCollapsedSummary.hidden = !state.ui.contextCollapsed;
     managerCollapsedSummary.textContent =
       buildManagerStatusItems().join(" · ") || "展开后可以看到经理说明和当前状态。";
-  }
-
-  if (managerSubtitle) {
-    managerSubtitle.hidden = state.ui.contextCollapsed;
-  }
-
-  if (managerStatusStrip) {
-    managerStatusStrip.hidden = state.ui.contextCollapsed;
   }
 
   const messages = state.manager.messages || [];
@@ -782,10 +781,18 @@ managerInput.addEventListener("input", syncComposerHeight);
 window.addEventListener("resize", updateViewportHeight);
 window.visualViewport?.addEventListener("resize", updateViewportHeight);
 
-managerContextToggleButton?.addEventListener("click", () => {
-  state.ui.contextCollapsed = !state.ui.contextCollapsed;
+function setManagerContextCollapsed(nextValue) {
+  state.ui.contextCollapsed = Boolean(nextValue);
   persistUiState();
   renderManagerPanel();
+}
+
+managerContextExpandButton?.addEventListener("click", () => {
+  setManagerContextCollapsed(false);
+});
+
+managerContextCollapseButton?.addEventListener("click", () => {
+  setManagerContextCollapsed(true);
 });
 
 updateViewportHeight();

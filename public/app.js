@@ -120,7 +120,9 @@ const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const shellNode = document.querySelector(".shell");
 const agentsPanel = document.querySelector(".agents-panel");
+const agentsSubtitle = document.querySelector("#agents-subtitle");
 const agentsToggleButton = document.querySelector("#agents-toggle-button");
+const agentsPanelBody = document.querySelector("#agents-panel-body");
 const agentsCollapsedSummary = document.querySelector("#agents-collapsed-summary");
 const managerSubtitle = document.querySelector("#manager-subtitle");
 const managerProvider = document.querySelector("#manager-provider");
@@ -1017,7 +1019,12 @@ function renderDevices() {
 }
 
 function renderAgentsPanelSummary() {
-  if (!agentsPanel || !agentsToggleButton || !agentsCollapsedSummary) {
+  if (
+    !agentsPanel ||
+    !agentsToggleButton ||
+    !agentsCollapsedSummary ||
+    !agentsPanelBody
+  ) {
     return;
   }
 
@@ -1049,8 +1056,12 @@ function renderAgentsPanelSummary() {
   }
 
   agentsPanel.classList.toggle("collapsed", effectiveCollapsed);
-  deviceList.hidden = effectiveCollapsed;
-  agentList.hidden = effectiveCollapsed;
+  agentsPanelBody.hidden = effectiveCollapsed;
+  deviceList.hidden = false;
+  agentList.hidden = false;
+  if (agentsSubtitle) {
+    agentsSubtitle.hidden = effectiveCollapsed;
+  }
   agentsCollapsedSummary.hidden = !effectiveCollapsed;
   agentsCollapsedSummary.textContent =
     summaryParts.join(" · ") || "先展开这里，选择要直连的设备和员工。";

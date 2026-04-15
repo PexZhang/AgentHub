@@ -11,7 +11,7 @@
   </head>
   <body class="manager-home">
     <div class="shell">
-      <header class="topbar">
+      <header class="topbar" id="manager-topbar">
         <div>
           <p class="eyebrow">AgentHub</p>
           <h1>AI 经理工作台</h1>
@@ -29,19 +29,34 @@
       </header>
 
       <section class="panel manager-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2>告诉我你现在想推进什么</h2>
-            <p class="muted" id="manager-subtitle">
-              直接问我任务、员工状态或进度。只有你要深入看某位员工时，我才给你跳转卡片。
-            </p>
-          </div>
-          <button type="button" class="session-action-button" id="manager-context-toggle-button">
+        <div id="manager-context-collapsed-bar" class="manager-context-collapsed-bar" hidden>
+          <div id="manager-collapsed-summary" class="section-collapsed-summary"></div>
+          <button
+            type="button"
+            class="session-action-button"
+            id="manager-context-expand-button"
+          >
             展开
           </button>
         </div>
-        <div id="manager-collapsed-summary" class="section-collapsed-summary" hidden></div>
-        <div id="manager-status-strip" class="manager-status-strip"></div>
+        <div id="manager-context-body" class="manager-context-body">
+          <div class="panel-title-row">
+            <div>
+              <h2>告诉我你现在想推进什么</h2>
+              <p class="muted" id="manager-subtitle">
+                直接问我任务、员工状态或进度。只有你要深入看某位员工时，我才给你跳转卡片。
+              </p>
+            </div>
+            <button
+              type="button"
+              class="session-action-button"
+              id="manager-context-collapse-button"
+            >
+              收起
+            </button>
+          </div>
+          <div id="manager-status-strip" class="manager-status-strip"></div>
+        </div>
         <div id="manager-stage" class="message-stage manager-stage">
           <div id="manager-messages" class="messages manager-messages"></div>
         </div>
