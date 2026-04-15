@@ -1765,6 +1765,7 @@ function connect() {
         type: "hello",
         role: "app",
         token: state.auth.token || "",
+        appOrigin: window.location.origin,
       })
     );
     render();

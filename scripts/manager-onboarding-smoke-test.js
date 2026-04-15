@@ -9,7 +9,7 @@ function sleep(ms) {
 }
 
 function randomPort() {
-  return 4200 + Math.floor(Math.random() * 500);
+  return 4700 + Math.floor(Math.random() * 500);
 }
 
 function spawnProcess(command, args, { cwd, env, label }) {
@@ -51,7 +51,7 @@ async function waitForHealth(hubOrigin, timeoutMs = 15000) {
     await sleep(250);
   }
 
-  throw new Error("Manager knowledge smoke timed out while waiting for Hub health.");
+  throw new Error("Manager onboarding smoke timed out while waiting for Hub health.");
 }
 
 async function fetchState(hubOrigin, appToken) {
@@ -83,7 +83,7 @@ async function waitForAssistantMessage(hubOrigin, appToken, match, timeoutMs = 1
     await sleep(250);
   }
 
-  throw new Error("Manager knowledge smoke timed out while waiting for assistant reply.");
+  throw new Error("Manager onboarding smoke timed out while waiting for assistant reply.");
 }
 
 async function stopProcess(child) {
@@ -104,11 +104,11 @@ async function stopProcess(child) {
 
 async function main() {
   const repoRoot = "/Users/zhangpeng/ai-chat-mvp";
-  const tempRoot = await fs.mkdtemp(join(os.tmpdir(), "agenthub-manager-knowledge-"));
+  const tempRoot = await fs.mkdtemp(join(os.tmpdir(), "agenthub-manager-onboarding-"));
   const dataFile = join(tempRoot, "state.json");
   const hubPort = randomPort();
   const hubOrigin = `http://127.0.0.1:${hubPort}`;
-  const appToken = "manager-knowledge-app-token";
+  const appToken = "manager-onboarding-app-token";
   const socketUrl = hubOrigin.replace(/^http/u, "ws") + "/ws";
 
   let server = null;
@@ -121,6 +121,7 @@ async function main() {
         ...process.env,
         PORT: String(hubPort),
         APP_TOKEN: appToken,
+        AGENT_TOKEN: "manager-onboarding-agent-token",
         DATA_FILE: dataFile,
         MANAGER_PROVIDER: "local",
       },
@@ -135,11 +136,18 @@ async function main() {
       socket.once("error", reject);
     });
 
-    socket.send(JSON.stringify({ type: "hello", role: "app", token: appToken }));
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        role: "app",
+        token: appToken,
+        appOrigin: hubOrigin,
+      })
+    );
     socket.send(
       JSON.stringify({
         type: "manager_message",
-        text: "别的 Agent 怎么接入这个平台？",
+        text: "具体怎么接入一个新的 Codex 员工？",
       })
     );
 
@@ -147,18 +155,17 @@ async function main() {
       hubOrigin,
       appToken,
       (text) =>
-        text.includes("npm run agent:onboard:codex") ||
-        text.includes("单文件员工配置") ||
-        text.includes("接入单位是数字员工") ||
-        text.includes("先生成员工配置"),
+        text.includes("npm run agent:onboard:codex") &&
+        text.includes("npm run agent -- --config") &&
+        text.includes(hubOrigin),
       15000
     );
 
-    if (!assistantMessage.text) {
-      throw new Error("Manager knowledge smoke did not capture a usable assistant reply.");
+    if (!assistantMessage.text.includes("grep '^AGENT_TOKEN=' .env")) {
+      throw new Error("Manager onboarding smoke did not include AGENT_TOKEN lookup guidance.");
     }
 
-    console.log("Manager knowledge smoke test passed.");
+    console.log("Manager onboarding smoke test passed.");
   } finally {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.close();
@@ -169,6 +176,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error.message || "Manager knowledge smoke test failed.");
+  console.error(error.message || "Manager onboarding smoke test failed.");
   process.exit(1);
 });

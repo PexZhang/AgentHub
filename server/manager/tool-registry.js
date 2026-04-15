@@ -45,6 +45,17 @@ function buildSpecs() {
       required: ["query"],
     }),
     baseSpec({
+      name: "get_onboarding_guide",
+      description:
+        "为新设备或新数字员工生成可执行的接入步骤和命令模板。用户问“具体怎么接入”“要敲什么命令”时优先使用。",
+      properties: {
+        runtime: {
+          type: "string",
+          description: "目标运行时，当前优先支持 codex。",
+        },
+      },
+    }),
+    baseSpec({
       name: "list_tasks",
       description: "列出当前任务与整体进度，用于回答谁在忙、谁卡住了、谁最需要关注。",
       properties: {

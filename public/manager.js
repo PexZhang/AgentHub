@@ -356,11 +356,13 @@ function buildManagerStatusItems() {
     items.push(`${blockedTaskCount} 个任务阻塞`);
   }
 
-  items.push(
-    state.manager.provider === "local"
-      ? "经理层：本地摘要"
-      : `经理层：${state.manager.provider} · ${state.manager.model || "已连接模型"}`
-  );
+  if (!window.matchMedia("(max-width: 720px)").matches) {
+    items.push(
+      state.manager.provider === "local"
+        ? "经理层：本地摘要"
+        : `经理层：${state.manager.provider} · ${state.manager.model || "已连接模型"}`
+    );
+  }
 
   return items;
 }
@@ -640,6 +642,7 @@ function connect() {
         type: "hello",
         role: "app",
         token: state.auth.token || "",
+        appOrigin: window.location.origin,
       })
     );
     render();

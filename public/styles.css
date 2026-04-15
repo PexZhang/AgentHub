@@ -41,6 +41,11 @@ body {
   overflow-y: auto;
 }
 
+body.manager-home,
+body.direct-home {
+  align-items: stretch;
+}
+
 button,
 textarea {
   font: inherit;
@@ -1613,8 +1618,21 @@ h2 {
     padding: 8px;
   }
 
+  body.manager-home,
+  body.direct-home {
+    padding: 0;
+    overflow: hidden;
+  }
+
   .shell {
     gap: 10px;
+  }
+
+  .manager-home .shell,
+  .direct-home .shell {
+    height: var(--app-height);
+    max-width: none;
+    gap: 0;
   }
 
   .panel {
@@ -1637,12 +1655,88 @@ h2 {
     order: 2;
   }
 
+  .manager-home .topbar,
+  .direct-home .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    gap: 8px;
+    padding: calc(10px + env(safe-area-inset-top)) 12px 8px;
+    background: linear-gradient(
+      180deg,
+      rgba(6, 15, 24, 0.96) 0%,
+      rgba(6, 15, 24, 0.82) 100%
+    );
+    backdrop-filter: blur(16px);
+  }
+
+  .manager-home .eyebrow,
+  .direct-home .eyebrow,
+  .manager-home .topbar .muted,
+  .direct-home .topbar .muted,
+  .manager-home .topbar-text-link,
+  .direct-home .nav-pill.secondary {
+    display: none;
+  }
+
+  .manager-home .topbar h1,
+  .direct-home .topbar h1 {
+    font-size: 20px;
+  }
+
+  .manager-home .topbar-actions,
+  .direct-home .topbar-actions {
+    width: 100%;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
   .panel-title-row {
     padding: 16px 14px 10px;
   }
 
+  .manager-home .manager-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    border-radius: 0;
+    border-right: none;
+    border-bottom: none;
+    border-left: none;
+    box-shadow: none;
+    background: rgba(9, 18, 28, 0.94);
+  }
+
+  .manager-home .panel-title-row {
+    padding: 12px 12px 8px;
+  }
+
+  .manager-home #manager-subtitle {
+    display: none;
+  }
+
   .manager-status-strip {
     padding: 0 12px 10px;
+  }
+
+  .manager-home .manager-status-strip {
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 0 12px 8px;
+    scrollbar-width: none;
+  }
+
+  .manager-home .manager-status-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .manager-home .manager-status-pill {
+    min-height: 28px;
+    white-space: nowrap;
+    padding: 5px 9px;
   }
 
   .manager-summary {
@@ -1685,6 +1779,26 @@ h2 {
     min-height: min(62vh, 560px);
     max-height: none;
     padding: 0 12px 4px;
+  }
+
+  .manager-home .manager-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 10px 4px;
+  }
+
+  .manager-home .manager-messages {
+    padding-bottom: 8px;
+  }
+
+  .manager-home .empty-card {
+    margin: 0 0 8px;
+    padding: 14px;
+  }
+
+  .manager-home .manager-starter-card {
+    margin-top: 10px;
+    padding: 12px;
   }
 
   .manager-starter-list {
@@ -1826,6 +1940,31 @@ h2 {
     padding-left: 12px;
   }
 
+  .manager-home .message,
+  .direct-home .message {
+    margin: 8px 0 12px;
+  }
+
+  .manager-home .message.assistant,
+  .manager-home .message.user,
+  .direct-home .message.assistant,
+  .direct-home .message.user {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .manager-home .bubble,
+  .direct-home .bubble {
+    max-width: 92%;
+    border-radius: 16px;
+    padding: 12px 12px 10px;
+  }
+
+  .manager-home .meta,
+  .direct-home .meta {
+    padding: 4px 4px 0;
+  }
+
   .composer {
     grid-template-columns: 1fr;
     gap: 8px;
@@ -1840,6 +1979,20 @@ h2 {
 
   .composer button {
     min-height: 48px;
+  }
+
+  .manager-home .composer,
+  .direct-home .composer {
+    position: sticky;
+    bottom: 0;
+    z-index: 6;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: rgba(7, 15, 23, 0.96);
+  }
+
+  .manager-home .composer button,
+  .direct-home .composer button {
+    min-height: 46px;
   }
 
   .message-jump-button {
