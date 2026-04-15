@@ -2068,6 +2068,95 @@ function formatApprovalListReply(snapshot) {
     .join("\n");
 }
 
+function isManagerIdentityQuestion(text) {
+  return /(你是谁|你是做什么的|你是干嘛的|介绍一下你自己|经理是谁|你是什么)/.test(text);
+}
+
+function isManagerCapabilityQuestion(text) {
+  return /(你能做啥|你能做什么|你会做啥|你会什么|能帮我做啥|能帮我做什么|怎么用你|你可以帮我什么)/.test(
+    text
+  );
+}
+
+function isEmployeeDetailQuestion(text) {
+  return /(具体信息|详细信息|详细情况|具体情况|详情|细节|介绍|资料|信息是啥|信息是什么)/.test(
+    text
+  );
+}
+
+function selectEmployeesForDetail(snapshot, text, mentionedAgent) {
+  if (mentionedAgent) {
+    return [mentionedAgent];
+  }
+
+  if (/(在线员工|在线的员工|谁在线|在线的)/.test(text)) {
+    return snapshot.agents.filter((agent) => agent.online);
+  }
+
+  if (/(离线员工|离线的员工|谁离线|离线的)/.test(text)) {
+    return snapshot.agents.filter((agent) => !agent.online);
+  }
+
+  return snapshot.agents;
+}
+
+function formatEmployeeDetailReply(snapshot, agents) {
+  if (!Array.isArray(agents) || agents.length === 0) {
+    return "当前没有匹配到需要展开详情的员工。";
+  }
+
+  return agents
+    .slice(0, 6)
+    .map((agent) => {
+      const employee = summarizeEmployee(agent, snapshot);
+      const workspaces = (snapshot.workspaces || [])
+        .filter((workspace) => workspace.employeeId === agent.id)
+        .slice(0, 3)
+        .map((workspace) => workspace.name)
+        .filter(Boolean);
+
+      const workspaceText = workspaces.length > 0 ? workspaces.join("、") : "未登记工作区";
+      const summaryText = agent.lastSummary || employee.currentTaskSummary || "最近还没有汇报。";
+      const taskText = employee.currentTaskTitle
+        ? `当前任务是“${employee.currentTaskTitle}”，状态 ${employee.currentTaskStatus}。`
+        : `当前${employee.online ? "在线但空闲" : "离线"}。`;
+
+      return `${employee.name}：设备 ${employee.deviceName}，运行时 ${employee.runtime}，${
+        employee.online ? "在线" : "离线"
+      }。${taskText} 工作区：${workspaceText}。最近汇报：${summaryText}`;
+    })
+    .join("\n");
+}
+
+function buildManagerIdentityReply(snapshot) {
+  const onlineCount = snapshot.agents.filter((agent) => agent.online).length;
+  const totalCount = snapshot.agents.length;
+  const workspaceCount = Array.isArray(snapshot.workspaces) ? snapshot.workspaces.length : 0;
+  const taskCount = Array.isArray(snapshot.tasks) ? snapshot.tasks.length : 0;
+
+  return [
+    "我是 AgentHub 的 AI经理，负责把你的目标翻译成员工任务、汇总执行进度，并在必要时把你切到某位员工的直连。",
+    `当前我接管的是这个工作台：${onlineCount}/${totalCount} 位员工在线，${taskCount} 条任务，${workspaceCount} 个工作区。`,
+    MANAGER_PROVIDER === "local"
+      ? "我现在运行在本地摘要模式，更擅长明确指令，比如盘点员工、查看任务、追某位员工进度、切到直连和处理审批。"
+      : `当前经理模型：${MANAGER_PROVIDER} · ${MANAGER_MODEL}。`,
+  ].join("\n\n");
+}
+
+function buildManagerCapabilityReply(snapshot, prefix = "我现在最适合帮你做这些事：") {
+  return [
+    prefix,
+    "1. 盘点员工：现在有哪些员工在线、分别在什么设备上。",
+    "2. 看执行情况：谁在做什么、谁卡住了、最近有什么进度。",
+    "3. 分派任务：把某个目标交给指定员工，并尽量自动绑定工作区。",
+    "4. 进入直连：当你要亲自指导某位员工时，我可以直接给你跳转入口。",
+    "5. 处理审批：帮你找出待确认事项，并在你同意或拒绝后回推给员工。",
+    snapshot.agents.length > 0
+      ? `你现在就可以这样问我：现在我的员工有哪些 / 帮我看看 ${snapshot.agents[0].name} 在做什么 / 帮我切到和 ${snapshot.agents[0].name} 的对话`
+      : "等员工接入后，你就可以直接问我他们的状态和任务进展。",
+  ].join("\n");
+}
+
 function resolveApprovalMatches(snapshot, options = {}) {
   const approvalRef = normalizeText(options.approvalRef).toLowerCase();
   const employeeRef = normalizeText(options.employeeRef).toLowerCase();
@@ -3131,6 +3220,20 @@ async function runLocalManager(text) {
   const mentionedAgent = findMentionedAgent(snapshot, text);
   const isApprovalDecision = /(批准|同意|通过|驳回|拒绝)/.test(text);
 
+  if (isManagerIdentityQuestion(text)) {
+    return {
+      text: buildManagerIdentityReply(snapshot),
+      action: null,
+    };
+  }
+
+  if (isManagerCapabilityQuestion(text)) {
+    return {
+      text: buildManagerCapabilityReply(snapshot),
+      action: null,
+    };
+  }
+
   if (isApprovalDecision) {
     const explicitApprovalId = extractStructuredRef(
       text,
@@ -3204,6 +3307,18 @@ async function runLocalManager(text) {
     return {
       text: `已切到和 ${mentionedAgent.name} 的直连对话。当前他正在处理“${taskTitle}”。`,
       action: result.clientAction,
+    };
+  }
+
+  if (
+    (mentionedAgent && isEmployeeDetailQuestion(text)) ||
+    (/(员工|agent)/i.test(text) && isEmployeeDetailQuestion(text)) ||
+    /(在线员工|离线员工)/.test(text)
+  ) {
+    const selectedAgents = selectEmployeesForDetail(snapshot, text, mentionedAgent);
+    return {
+      text: formatEmployeeDetailReply(snapshot, selectedAgents),
+      action: null,
     };
   }
 
@@ -3281,11 +3396,7 @@ async function runLocalManager(text) {
   }
 
   return {
-    text: [
-      "我已经接管当前工作台，可以先帮你盘点员工和任务。",
-      formatEmployeeListReply(snapshot),
-      "如果你想继续追某位员工的细节，直接点名问我，我会给你跳转入口。",
-    ].join("\n\n"),
+    text: buildManagerCapabilityReply(snapshot, "我还没完全理解你的意思，不过你可以直接这样使唤我："),
     action: null,
   };
 }
