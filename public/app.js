@@ -1,12 +1,13 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 
-const UI_PREFS_KEY = "agenthub-ui-prefs-v2";
+const UI_PREFS_KEY = "agenthub-ui-prefs-v3";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const launchParams = new URLSearchParams(window.location.search);
 
 function buildDefaultUiState() {
   return {
-    threadsCollapsed: window.matchMedia("(max-width: 720px)").matches,
+    agentsCollapsed: true,
+    threadsCollapsed: true,
     mobileView: "devices",
   };
 }
@@ -118,6 +119,9 @@ const state = {
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const shellNode = document.querySelector(".shell");
+const agentsPanel = document.querySelector(".agents-panel");
+const agentsToggleButton = document.querySelector("#agents-toggle-button");
+const agentsCollapsedSummary = document.querySelector("#agents-collapsed-summary");
 const managerSubtitle = document.querySelector("#manager-subtitle");
 const managerProvider = document.querySelector("#manager-provider");
 const managerSummary = document.querySelector("#manager-summary");
@@ -771,6 +775,40 @@ function openManagerAction(action) {
   }
 }
 
+function renderManagerActionCard(action) {
+  if (!action?.type) {
+    return "";
+  }
+
+  const title =
+    action.title ||
+    (action.type === "open_task_detail"
+      ? "查看任务详情"
+      : `查看 ${action.agentName || action.agentId} 的执行细节`);
+  const description =
+    action.description ||
+    (action.type === "open_task_detail"
+      ? "先看任务状态、工作区和最近进展，再决定要不要直连员工。"
+      : "进入该员工的直连页，查看当前任务、对话和上下文。");
+  const buttonLabel = action.label || "查看详情并跳转";
+
+  return `
+    <div class="manager-action-card">
+      <div class="manager-action-copy">
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(description)}</p>
+      </div>
+      <button
+        type="button"
+        class="manager-action-button"
+        data-manager-action="${encodeURIComponent(JSON.stringify(action))}"
+      >
+        ${escapeHtml(buttonLabel)}
+      </button>
+    </div>
+  `;
+}
+
 function applyLaunchTarget() {
   if (state.launchTarget.applied || !state.launchTarget.agentId) {
     return;
@@ -875,24 +913,7 @@ function renderManagerPanel() {
             ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
             : "";
         const actionMarkup =
-          message.role === "assistant" && message.action?.type
-            ? `
-              <div class="manager-action-row">
-                <button
-                  type="button"
-                  class="manager-action-button"
-                  data-manager-action="${encodeURIComponent(JSON.stringify(message.action))}"
-                >
-                  ${escapeHtml(
-                    message.action.label ||
-                      (message.action.type === "open_task_detail"
-                        ? "查看任务详情"
-                        : `进入与 ${message.action.agentName || message.action.agentId} 的直连`)
-                  )}
-                </button>
-              </div>
-            `
-            : "";
+          message.role === "assistant" ? renderManagerActionCard(message.action) : "";
 
         return `
           <article class="message ${roleClass}">
@@ -995,15 +1016,63 @@ function renderDevices() {
   });
 }
 
+function renderAgentsPanelSummary() {
+  if (!agentsPanel || !agentsToggleButton || !agentsCollapsedSummary) {
+    return;
+  }
+
+  const forceExpanded = isMobileLayout() && state.ui.mobileView === "devices";
+  const effectiveCollapsed = forceExpanded
+    ? false
+    : Boolean(state.ui.agentsCollapsed && state.agents.length > 0);
+  const activeAgent = getAgent(state.activeAgentId);
+  const devices = state.devices.length > 0 ? state.devices : deriveDevicesFromAgents(state.agents);
+  const activeDevice =
+    getDevice(state.activeDeviceId) ||
+    devices.find((device) => device.id === activeAgent?.deviceId) ||
+    devices[0] ||
+    null;
+  const onlineAgentCount = state.agents.filter((agent) => agent.online).length;
+  const summaryParts = [];
+
+  if (activeAgent?.name) {
+    summaryParts.push(`当前员工：${activeAgent.name}`);
+  }
+  if (activeDevice?.name) {
+    summaryParts.push(`设备：${activeDevice.name}`);
+  }
+  if (state.agents.length > 0) {
+    summaryParts.push(`${onlineAgentCount}/${state.agents.length} 位在线`);
+  }
+  if (devices.length > 0) {
+    summaryParts.push(`${devices.length} 台设备`);
+  }
+
+  agentsPanel.classList.toggle("collapsed", effectiveCollapsed);
+  deviceList.hidden = effectiveCollapsed;
+  agentList.hidden = effectiveCollapsed;
+  agentsCollapsedSummary.hidden = !effectiveCollapsed;
+  agentsCollapsedSummary.textContent =
+    summaryParts.join(" · ") || "先展开这里，选择要直连的设备和员工。";
+  agentsToggleButton.hidden = forceExpanded;
+  agentsToggleButton.textContent = effectiveCollapsed ? "展开" : "收起";
+  agentsToggleButton.setAttribute(
+    "aria-label",
+    effectiveCollapsed ? "展开员工与设备" : "收起员工与设备"
+  );
+}
+
 function renderAgents() {
   const visibleAgents = getAgentsForDevice(state.activeDeviceId);
   const onlineAgentCount = state.agents.filter((agent) => agent.online).length;
   agentCount.textContent = `${state.devices.length || deriveDevicesFromAgents(state.agents).length} 台设备 · ${onlineAgentCount} 个在线数字员工`;
 
   if (state.agents.length === 0) {
+    state.ui.agentsCollapsed = false;
     deviceList.innerHTML = "";
     agentList.innerHTML =
       '<div class="empty-card">还没有 Agent 连上来。先运行本地 Agent，再从手机打开这个页面。</div>';
+    renderAgentsPanelSummary();
     return;
   }
 
@@ -1012,6 +1081,7 @@ function renderAgents() {
   if (visibleAgents.length === 0) {
     agentList.innerHTML =
       '<div class="empty-card">这台设备下还没有数字员工。连上第二台电脑后，这里会显示它的 Agent。</div>';
+    renderAgentsPanelSummary();
     return;
   }
 
@@ -1039,6 +1109,8 @@ function renderAgents() {
       render();
     });
   });
+
+  renderAgentsPanelSummary();
 }
 
 function renderThreadStrip(agent) {
@@ -1851,19 +1923,17 @@ function connect() {
       return;
     }
 
-    if (
-      (payload.type === "manager_action_requested" || payload.type === "manager_direct_opened") &&
-      payload.action
-    ) {
-      openManagerAction(payload.action);
-      return;
-    }
-
     if (payload.type === "error" && payload.message) {
       console.error(payload.message);
     }
   });
 }
+
+agentsToggleButton?.addEventListener("click", () => {
+  state.ui.agentsCollapsed = !state.ui.agentsCollapsed;
+  persistUiState();
+  renderAgentsPanelSummary();
+});
 
 composer.addEventListener("submit", (event) => {
   event.preventDefault();

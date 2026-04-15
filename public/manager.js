@@ -693,13 +693,6 @@ function connect() {
       return;
     }
 
-    if (
-      (payload.type === "manager_action_requested" || payload.type === "manager_direct_opened") &&
-      payload.action
-    ) {
-      openManagerAction(payload.action);
-      return;
-    }
   });
 }
 

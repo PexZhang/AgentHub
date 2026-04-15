@@ -2432,6 +2432,41 @@ function isAttentionQuestion(text) {
   );
 }
 
+function shouldPreferDeterministicManagerFlow(text, snapshot = buildSnapshot()) {
+  const mentionedAgent = findMentionedAgent(snapshot, text);
+
+  if (
+    isManagerIdentityQuestion(text) ||
+    isManagerCapabilityQuestion(text) ||
+    isOnboardingGuideQuestion(text) ||
+    isManagerKnowledgeQuestion(text) ||
+    isAttentionQuestion(text)
+  ) {
+    return true;
+  }
+
+  if (
+    /(审批|授权|批准|风险)/.test(text) ||
+    (mentionedAgent && isEmployeeDiagnosisQuestion(text)) ||
+    (mentionedAgent && isEmployeeDetailQuestion(text)) ||
+    (mentionedAgent && /(进度|在做|干啥|做啥|状态)/.test(text)) ||
+    (mentionedAgent &&
+      /(切到|直连|对话|连接|进入|打开|连到|切换到|带我去|跳到)/.test(text))
+  ) {
+    return true;
+  }
+
+  if (mentionedAgent && /(催一下|跟进一下|提醒一下|告诉|通知|让.*汇报|继续推进|先停一下|暂停一下|补充要求)/.test(text)) {
+    return true;
+  }
+
+  if (/(任务|进度|状态|做到哪|完成没|卡住)/.test(text)) {
+    return true;
+  }
+
+  return false;
+}
+
 function isEmployeeDiagnosisQuestion(text) {
   return /(为什么.*(没接上|接不上|离线|不在线|没工作区|没有工作区|异常|有问题)|接入.*正常|健康.*怎样|是不是假在线|是不是停住了|诊断一下)/.test(
     text
@@ -3920,7 +3955,7 @@ async function runLocalManager(text) {
     };
   }
 
-  if (/(切到|直连|对话)/.test(text)) {
+  if (/(切到|直连|对话|连接|进入|打开|连到|切换到|带我去|跳到)/.test(text)) {
     if (!mentionedAgent) {
       return {
         text: `我可以帮你切到具体员工的直连，但我还没识别出目标。当前员工有：${snapshot.agents
@@ -4038,7 +4073,9 @@ async function runLocalManager(text) {
 }
 
 async function runManager(text) {
-  if (isOnboardingGuideQuestion(text)) {
+  const snapshot = buildSnapshot();
+
+  if (shouldPreferDeterministicManagerFlow(text, snapshot)) {
     return runLocalManager(text);
   }
 

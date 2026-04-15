@@ -33,8 +33,14 @@
             <h2>员工与设备</h2>
             <p class="muted">先选设备，再选员工，然后进入对应直连会话。</p>
           </div>
-          <span class="muted" id="agent-count">0 online</span>
+          <div class="agents-panel-actions">
+            <span class="muted" id="agent-count">0 online</span>
+            <button type="button" class="session-action-button" id="agents-toggle-button">
+              展开
+            </button>
+          </div>
         </div>
+        <div id="agents-collapsed-summary" class="section-collapsed-summary" hidden></div>
         <div id="device-list" class="device-list"></div>
         <div id="agent-list" class="agent-list"></div>
       </section>

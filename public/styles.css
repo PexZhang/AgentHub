@@ -642,9 +642,21 @@ h2 {
   padding: 18px 18px 12px;
 }
 
+.agents-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .agents-panel {
   flex: 0 0 auto;
   padding-bottom: 16px;
+}
+
+.agents-panel.collapsed {
+  padding-bottom: 12px;
 }
 
 .device-list,
@@ -816,6 +828,9 @@ h2 {
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .thread-label,
