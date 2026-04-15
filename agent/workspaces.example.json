@@ -1,0 +1,20 @@
+[
+  {
+    "id": "workspace-agenthub-mac",
+    "name": "AgentHub 仓库",
+    "path": "/Users/zhangpeng/ai-chat-mvp",
+    "kind": "repo",
+    "description": "AgentHub 主仓库，适合让 Codex 处理代码、协议和 UI 重构。",
+    "tags": ["product", "code", "manager-console"],
+    "runtimeHints": ["codex"]
+  },
+  {
+    "id": "workspace-contracts-docs",
+    "name": "合同文档目录",
+    "path": "/Users/zhangpeng/Documents/contracts",
+    "kind": "docs",
+    "description": "文档整理和总结类任务的默认目录。",
+    "tags": ["docs", "contracts"],
+    "runtimeHints": ["codex"]
+  }
+]

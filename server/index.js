@@ -6,6 +6,8 @@ import { promises as fs } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
+import { buildManagerTaskDraft } from "./manager/task-draft.js";
+import { createManagerToolRegistry } from "./manager/tool-registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,9 +18,128 @@ const DATA_FILE =
 const MAX_RECENT_CODEX_SESSIONS = 12;
 const APP_TOKEN = normalizeText(process.env.APP_TOKEN);
 const AGENT_TOKEN = normalizeText(process.env.AGENT_TOKEN);
+const MANAGER_PROVIDER = resolveManagerProvider();
+const MANAGER_API_KEY = resolveManagerApiKey(MANAGER_PROVIDER);
+const MANAGER_BASE_URL =
+  normalizeText(process.env.MANAGER_BASE_URL) || defaultManagerBaseUrl(MANAGER_PROVIDER);
+const MANAGER_MODEL = normalizeText(process.env.MANAGER_MODEL) || defaultManagerModel(MANAGER_PROVIDER);
+const MANAGER_REASONING_EFFORT =
+  normalizeText(process.env.MANAGER_REASONING_EFFORT) || "low";
+const MANAGER_TEXT_VERBOSITY =
+  normalizeText(process.env.MANAGER_TEXT_VERBOSITY) || "low";
+const MANAGER_REQUEST_TIMEOUT_MS = Math.max(
+  3000,
+  Number(process.env.MANAGER_REQUEST_TIMEOUT_MS || 15000)
+);
+const MANAGER_MAX_TOOL_LOOPS = 6;
+const SNAPSHOT_MANAGER_MESSAGE_LIMIT = Math.max(
+  20,
+  Number(process.env.SNAPSHOT_MANAGER_MESSAGE_LIMIT || 80)
+);
+const SNAPSHOT_CONVERSATION_MESSAGE_LIMIT = Math.max(
+  40,
+  Number(process.env.SNAPSHOT_CONVERSATION_MESSAGE_LIMIT || 120)
+);
+const MANAGER_PROMPT = [
+  "你是 AgentHub 的 AI 经理。",
+  "你负责理解用户任务，盘点数字员工状态，汇总进度，并在需要时把用户切到某位员工的直连对话。",
+  "默认用中文、简洁、像经理汇报一样回答。",
+  "能用工具确认状态时，不要猜测。",
+  "当用户问员工有哪些、他们在做什么、某个员工现在的进度，优先调用工具。",
+  "当用户问某条任务的状态、最近进展、是否卡住时，优先调用 get_task_status。",
+  "当用户问有哪些目录、仓库或工作区可用时，优先调用工作区工具。",
+  "当用户在分派任务前需要确认工作区时，优先调用 resolve_workspace_for_employee。",
+  "当用户问有哪些任务在等审批或哪些风险需要拍板时，优先调用审批工具。",
+  "当用户明确表示同意、批准、拒绝某个审批时，必须调用审批决策工具。",
+  "当用户想了解某位员工的细节时，除了口头汇报，也优先给一个可点击的详情入口。",
+  "当用户要求切到和某个员工的对话时，必须调用 switch_to_employee_chat。",
+  "当你分派任务时，尽量提供清晰的 task_title 和 success_signal，让执行员工更容易理解目标和验收方式。",
+  "只有在目标员工明显歧义或不存在时才追问。",
+  "不要暴露底层 JSON、函数名或系统实现细节。",
+].join(" ");
 
 function normalizeText(value) {
   return String(value || "").trim();
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveManagerProvider() {
+  const explicitProvider = normalizeText(process.env.MANAGER_PROVIDER).toLowerCase();
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  if (
+    normalizeText(
+      process.env.MANAGER_ZHIPU_API_KEY ||
+        process.env.ZHIPU_API_KEY ||
+        process.env.BIGMODEL_API_KEY
+    )
+  ) {
+    return "zhipu";
+  }
+
+  if (normalizeText(process.env.MANAGER_API_KEY)) {
+    return "openai-compatible";
+  }
+
+  if (normalizeText(process.env.MANAGER_OPENAI_API_KEY || process.env.OPENAI_API_KEY)) {
+    return "openai";
+  }
+
+  return "local";
+}
+
+function resolveManagerApiKey(provider) {
+  if (provider === "openai") {
+    return normalizeText(process.env.MANAGER_OPENAI_API_KEY || process.env.OPENAI_API_KEY);
+  }
+
+  if (provider === "zhipu") {
+    return normalizeText(
+      process.env.MANAGER_API_KEY ||
+        process.env.MANAGER_ZHIPU_API_KEY ||
+        process.env.ZHIPU_API_KEY ||
+        process.env.BIGMODEL_API_KEY
+    );
+  }
+
+  if (provider === "openai-compatible") {
+    return normalizeText(process.env.MANAGER_API_KEY);
+  }
+
+  return "";
+}
+
+function defaultManagerBaseUrl(provider) {
+  if (provider === "openai") {
+    return "https://api.openai.com/v1";
+  }
+
+  if (provider === "zhipu") {
+    return "https://open.bigmodel.cn/api/paas/v4";
+  }
+
+  if (provider === "openai-compatible") {
+    return "https://api.openai.com/v1";
+  }
+
+  return "";
+}
+
+function defaultManagerModel(provider) {
+  if (provider === "zhipu") {
+    return "glm-4.7-flash";
+  }
+
+  if (provider === "openai-compatible") {
+    return "gpt-4o-mini";
+  }
+
+  return "gpt-5.4-mini";
 }
 
 function normalizeDeviceId(value, fallback = "default-device") {
@@ -59,6 +180,227 @@ function buildConversationTitle(text, fallback = "New chat") {
   return `${normalized.slice(0, 24)}…`;
 }
 
+async function fetchJsonWithTimeout(url, init, timeoutMs = MANAGER_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`AI经理模型请求失败: ${response.status} ${rawText}`);
+    }
+
+    return rawText ? JSON.parse(rawText) : {};
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`AI经理模型请求超时（>${timeoutMs}ms）`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildDefaultManagerState() {
+  return {
+    messages: [],
+    previousResponseId: null,
+  };
+}
+
+function normalizeManagerMessage(message) {
+  return {
+    id: normalizeText(message?.id) || randomUUID(),
+    role: normalizeText(message?.role) === "assistant" ? "assistant" : "user",
+    text: normalizeText(message?.text),
+    createdAt: normalizeText(message?.createdAt) || new Date().toISOString(),
+    status: normalizeText(message?.status) || null,
+    answeredAt: normalizeText(message?.answeredAt) || null,
+    failedAt: normalizeText(message?.failedAt) || null,
+    errorMessage: normalizeText(message?.errorMessage) || null,
+    action: message?.action || null,
+  };
+}
+
+function normalizeManagerState(input) {
+  const base = buildDefaultManagerState();
+  if (!input || typeof input !== "object") {
+    return base;
+  }
+
+  return {
+    messages: Array.isArray(input.messages)
+      ? input.messages.map((message) => normalizeManagerMessage(message))
+      : [],
+    previousResponseId: normalizeText(input.previousResponseId) || null,
+  };
+}
+
+function truncateText(text, maxLength = 120) {
+  const normalized = normalizeText(text).replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}…`;
+}
+
+function getLastUserMessage(messages) {
+  return [...(messages || [])].reverse().find((message) => message.role === "user") || null;
+}
+
+function getLastAssistantMessage(messages) {
+  return (
+    [...(messages || [])].reverse().find((message) => message.role === "assistant") || null
+  );
+}
+
+function buildSnapshotMessageWindow(messages, limit) {
+  const sorted = [...(messages || [])].sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  );
+  const visibleMessages = sorted.slice(-limit);
+
+  return {
+    messages: visibleMessages,
+    totalMessageCount: sorted.length,
+    hiddenMessageCount: Math.max(0, sorted.length - visibleMessages.length),
+  };
+}
+
+function deriveTaskStatus(conversation) {
+  const latestUser = getLastUserMessage(conversation?.messages || []);
+  if (!latestUser) {
+    return {
+      key: "idle",
+      label: "空闲",
+      active: false,
+      blocked: false,
+    };
+  }
+
+  if (latestUser.status === "failed") {
+    return {
+      key: "blocked",
+      label: "已阻塞",
+      active: true,
+      blocked: true,
+    };
+  }
+
+  if (["queued", "sent", "processing"].includes(latestUser.status)) {
+    return {
+      key: "active",
+      label: latestUser.status === "queued" ? "待分派" : "处理中",
+      active: true,
+      blocked: false,
+    };
+  }
+
+  return {
+    key: "done",
+    label: "最近完成",
+    active: false,
+    blocked: false,
+  };
+}
+
+function buildTaskDescriptor(conversation, agent) {
+  if (!conversation) {
+    return null;
+  }
+
+  const latestUser = getLastUserMessage(conversation.messages || []);
+  const latestAssistant = getLastAssistantMessage(conversation.messages || []);
+  const status = deriveTaskStatus(conversation);
+  const lastUpdate = latestAssistant?.createdAt || latestUser?.createdAt || conversation.updatedAt;
+
+  return {
+    id: conversation.id,
+    conversationId: conversation.id,
+    title:
+      normalizeText(conversation.title) ||
+      buildConversationTitle(latestUser?.text, "New chat"),
+    agentId: conversation.agentId,
+    agentName: agent?.name || conversation.agentId,
+    deviceId: agent?.deviceId || conversation.deviceId || null,
+    deviceName: agent?.deviceName || conversation.deviceName || "当前设备",
+    status: status.key,
+    statusLabel: status.label,
+    active: status.active,
+    blocked: status.blocked,
+    lastUserText: truncateText(latestUser?.text),
+    progressSummary: truncateText(
+      latestAssistant?.text || latestUser?.text || "还没有任务进展"
+    ),
+    updatedAt: conversation.updatedAt,
+    lastUpdate,
+  };
+}
+
+function buildPersistedTaskDescriptor(task, agentMap, workspaceMap, conversationMap) {
+  if (!task) {
+    return null;
+  }
+
+  const conversation = task.sourceConversationId
+    ? conversationMap.get(task.sourceConversationId)
+    : null;
+  const agent = agentMap.get(task.ownerEmployeeId);
+  const workspace = task.workspaceId ? workspaceMap.get(task.workspaceId) : null;
+  const latestUser = conversation ? getLastUserMessage(conversation.messages || []) : null;
+  const latestAssistant = conversation ? getLastAssistantMessage(conversation.messages || []) : null;
+
+  return {
+    id: task.id,
+    taskId: task.id,
+    conversationId: task.sourceConversationId || conversation?.id || null,
+    sourceMessageId: task.sourceMessageId || null,
+    title: normalizeText(task.title) || buildConversationTitle(task.goal, "新任务"),
+    agentId: task.ownerEmployeeId || conversation?.agentId || null,
+    agentName: agent?.name || workspace?.employeeName || task.ownerEmployeeId || "未分配员工",
+    deviceId: agent?.deviceId || workspace?.deviceId || task.deviceId || null,
+    deviceName:
+      agent?.deviceName || workspace?.deviceName || task.deviceName || "当前设备",
+    workspaceId: task.workspaceId || null,
+    workspaceName: workspace?.name || null,
+    status: task.status,
+    statusLabel: buildTaskStatusLabel(task.status),
+    active: isActiveTaskStatus(task.status),
+    blocked: isBlockedTaskStatus(task.status),
+    lastUserText: truncateText(task.goal || latestUser?.text),
+    progressSummary: truncateText(
+      task.latestSummary ||
+        latestAssistant?.text ||
+        latestUser?.text ||
+        "还没有任务进展"
+    ),
+    updatedAt: task.updatedAt,
+    lastUpdate: task.updatedAt,
+    runStatus: task.runStatus || null,
+    approvalState: task.approvalState || "not_required",
+    blockedReason: task.blockedReason || null,
+    outputRef: task.outputRef || null,
+    managerSummary: task.managerSummary || null,
+    successSignal: task.successSignal || null,
+    labels: Array.isArray(task.labels) ? task.labels : [],
+  };
+}
+
+function compareByRecency(left, right) {
+  return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
+}
+
 function normalizeCodexSessions(input) {
   if (!Array.isArray(input)) {
     return [];
@@ -92,6 +434,331 @@ function normalizeCodexSessions(input) {
   return sessions;
 }
 
+function normalizeWorkspaceKind(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return normalized || "repo";
+}
+
+function normalizeWorkspaceList(input, agentMeta = {}) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const workspaces = [];
+
+  for (const item of input) {
+    const path = normalizeText(item?.path || item?.workdir);
+    if (!path) {
+      continue;
+    }
+
+    const id =
+      normalizeText(item?.id) ||
+      `workspace-${normalizeText(agentMeta.agentId || agentMeta.id) || workspaces.length + 1}`;
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    workspaces.push({
+      id,
+      name: normalizeText(item?.name) || path,
+      path,
+      kind: normalizeWorkspaceKind(item?.kind),
+      description: normalizeText(item?.description) || null,
+      tags: Array.isArray(item?.tags)
+        ? item.tags.map((tag) => normalizeText(tag)).filter(Boolean)
+        : [],
+      runtimeHints: (() => {
+        const hints = Array.isArray(item?.runtimeHints)
+          ? item.runtimeHints.map((hint) => normalizeText(hint)).filter(Boolean)
+          : [];
+        if (hints.length > 0) {
+          return hints;
+        }
+        return agentMeta.mode ? [agentMeta.mode] : [];
+      })(),
+      deviceId: normalizeDeviceId(item?.deviceId || agentMeta.deviceId),
+      deviceName: normalizeDeviceName(item?.deviceName || agentMeta.deviceName),
+      employeeId: normalizeText(
+        item?.defaultEmployeeId || item?.employeeId || agentMeta.agentId || agentMeta.id
+      ),
+      employeeName: normalizeText(item?.employeeName || agentMeta.name) || null,
+      online: Boolean(agentMeta.online ?? true),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  return workspaces;
+}
+
+function normalizeTaskPriority(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return ["low", "normal", "high", "urgent"].includes(normalized) ? normalized : "normal";
+}
+
+function normalizeTaskStatus(value, fallback = "queued") {
+  const normalized = normalizeText(value).toLowerCase();
+  return [
+    "draft",
+    "queued",
+    "assigned",
+    "in_progress",
+    "waiting_approval",
+    "blocked",
+    "handoff_pending",
+    "completed",
+    "failed",
+    "cancelled",
+  ].includes(normalized)
+    ? normalized
+    : fallback;
+}
+
+function normalizeRunStatus(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return [
+    "queued",
+    "accepted",
+    "starting",
+    "running",
+    "waiting_approval",
+    "blocked",
+    "handoff_pending",
+    "completed",
+    "failed",
+    "cancelled",
+  ].includes(normalized)
+    ? normalized
+    : null;
+}
+
+function mapRunStatusToTaskStatus(runStatus) {
+  const normalized = normalizeRunStatus(runStatus);
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "queued") {
+    return "queued";
+  }
+
+  if (["accepted", "starting"].includes(normalized)) {
+    return "assigned";
+  }
+
+  if (normalized === "running") {
+    return "in_progress";
+  }
+
+  if (normalized === "waiting_approval") {
+    return "waiting_approval";
+  }
+
+  if (normalized === "blocked") {
+    return "blocked";
+  }
+
+  if (normalized === "handoff_pending") {
+    return "handoff_pending";
+  }
+
+  if (normalized === "completed") {
+    return "completed";
+  }
+
+  if (normalized === "failed") {
+    return "failed";
+  }
+
+  if (normalized === "cancelled") {
+    return "cancelled";
+  }
+
+  return null;
+}
+
+function isActiveTaskStatus(status) {
+  return [
+    "queued",
+    "assigned",
+    "in_progress",
+    "waiting_approval",
+    "blocked",
+    "handoff_pending",
+  ].includes(normalizeTaskStatus(status, "queued"));
+}
+
+function isBlockedTaskStatus(status) {
+  return ["waiting_approval", "blocked", "handoff_pending"].includes(
+    normalizeTaskStatus(status, "queued")
+  );
+}
+
+function buildTaskStatusLabel(status) {
+  const normalized = normalizeTaskStatus(status, "queued");
+  return (
+    {
+      draft: "待确认",
+      queued: "待分派",
+      assigned: "已分派",
+      in_progress: "处理中",
+      waiting_approval: "等待审批",
+      blocked: "已阻塞",
+      handoff_pending: "待交接",
+      completed: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+    }[normalized] || "未知状态"
+  );
+}
+
+function normalizeStoredWorkspaceRecord(workspace, index = 0) {
+  const path = normalizeText(workspace?.path || workspace?.workdir);
+  const id =
+    normalizeText(workspace?.id) ||
+    (path ? `workspace-${normalizeText(path).toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : "") ||
+    `workspace-${index + 1}`;
+
+  return {
+    id,
+    name: normalizeText(workspace?.name) || path || `Workspace ${index + 1}`,
+    path: path || null,
+    kind: normalizeWorkspaceKind(workspace?.kind),
+    description: normalizeText(workspace?.description) || null,
+    tags: Array.isArray(workspace?.tags)
+      ? workspace.tags.map((tag) => normalizeText(tag)).filter(Boolean)
+      : [],
+    runtimeHints: Array.isArray(workspace?.runtimeHints)
+      ? workspace.runtimeHints.map((hint) => normalizeText(hint)).filter(Boolean)
+      : [],
+    deviceId: normalizeDeviceId(workspace?.deviceId),
+    deviceName: normalizeDeviceName(workspace?.deviceName),
+    employeeId: normalizeText(workspace?.employeeId || workspace?.defaultEmployeeId) || null,
+    employeeName: normalizeText(workspace?.employeeName) || null,
+    online: Boolean(workspace?.online),
+    updatedAt: normalizeText(workspace?.updatedAt) || new Date().toISOString(),
+  };
+}
+
+function normalizeStoredTaskRecord(task) {
+  const status = normalizeTaskStatus(task?.status, "queued");
+  const runStatus =
+    normalizeRunStatus(task?.runStatus) ||
+    normalizeRunStatus(task?.status) ||
+    (status === "completed"
+      ? "completed"
+      : status === "failed"
+        ? "failed"
+        : status === "blocked"
+          ? "blocked"
+          : status === "waiting_approval"
+            ? "waiting_approval"
+            : status === "handoff_pending"
+              ? "handoff_pending"
+              : status === "in_progress"
+                ? "running"
+                : status === "assigned"
+                  ? "accepted"
+                  : status === "queued"
+                    ? "queued"
+                    : null);
+  const createdAt = normalizeText(task?.createdAt) || new Date().toISOString();
+
+  return {
+    id: normalizeText(task?.id) || randomUUID(),
+    title:
+      normalizeText(task?.title) ||
+      buildConversationTitle(task?.goal || task?.latestSummary, "新任务"),
+    goal: normalizeText(task?.goal) || "",
+    status,
+    priority: normalizeTaskPriority(task?.priority),
+    workspaceId: normalizeText(task?.workspaceId) || null,
+    ownerEmployeeId: normalizeText(task?.ownerEmployeeId || task?.agentId) || null,
+    requestedBy: normalizeText(task?.requestedBy) || "human",
+    sourceConversationId:
+      normalizeText(task?.sourceConversationId || task?.conversationId) || null,
+    sourceMessageId: normalizeText(task?.sourceMessageId || task?.replyTo) || null,
+    directConversationId: normalizeText(task?.directConversationId) || null,
+    createdAt,
+    updatedAt: normalizeText(task?.updatedAt) || createdAt,
+    latestSummary:
+      normalizeText(task?.latestSummary || task?.progressSummary || task?.lastUserText) || "",
+    blockedReason: normalizeText(task?.blockedReason || task?.errorMessage) || null,
+    approvalState: normalizeText(task?.approvalState) || "not_required",
+    approvalReason: normalizeText(task?.approvalReason) || null,
+    outputRef: normalizeText(task?.outputRef) || null,
+    managerSummary: normalizeText(task?.managerSummary) || null,
+    successSignal: normalizeText(task?.successSignal) || null,
+    labels: Array.isArray(task?.labels)
+      ? task.labels.map((item) => normalizeText(item)).filter(Boolean)
+      : [],
+    candidateWorkspaceIds: Array.isArray(task?.candidateWorkspaceIds)
+      ? task.candidateWorkspaceIds.map((id) => normalizeText(id)).filter(Boolean)
+      : [],
+    deviceId: normalizeText(task?.deviceId) || null,
+    deviceName: normalizeText(task?.deviceName) || null,
+    runId: normalizeText(task?.runId) || null,
+    runStatus,
+  };
+}
+
+function normalizeStoredEmployeeRecord(employee) {
+  const updatedAt = normalizeText(employee?.updatedAt) || new Date().toISOString();
+  return {
+    id: normalizeText(employee?.id || employee?.employeeId) || randomUUID(),
+    name: normalizeText(employee?.name || employee?.employeeName) || "Digital Employee",
+    deviceId: normalizeDeviceId(employee?.deviceId),
+    deviceName: normalizeDeviceName(employee?.deviceName),
+    runtime: normalizeText(employee?.runtime || employee?.mode) || "unknown",
+    version: normalizeText(employee?.version) || null,
+    capabilities: Array.isArray(employee?.capabilities)
+      ? employee.capabilities.map((value) => normalizeText(value)).filter(Boolean)
+      : [],
+    status: normalizeText(employee?.status) || "idle",
+    online: Boolean(employee?.online),
+    currentTaskId: normalizeText(employee?.currentTaskId) || null,
+    currentRunId: normalizeText(employee?.currentRunId) || null,
+    lastSummary: normalizeText(employee?.lastSummary) || null,
+    health: normalizeText(employee?.health) || null,
+    labels: Array.isArray(employee?.labels)
+      ? employee.labels.map((value) => normalizeText(value)).filter(Boolean)
+      : [],
+    lastSeenAt: normalizeText(employee?.lastSeenAt) || updatedAt,
+    updatedAt,
+  };
+}
+
+function normalizeApprovalStatus(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return ["pending", "approved", "rejected", "cancelled"].includes(normalized)
+    ? normalized
+    : "pending";
+}
+
+function normalizeApprovalRecord(approval) {
+  const createdAt = normalizeText(approval?.createdAt) || new Date().toISOString();
+  return {
+    id: normalizeText(approval?.id) || randomUUID(),
+    taskId: normalizeText(approval?.taskId) || null,
+    runId: normalizeText(approval?.runId) || null,
+    requestedByEmployeeId:
+      normalizeText(approval?.requestedByEmployeeId || approval?.employeeId) || null,
+    reason: normalizeText(approval?.reason) || "需要审批",
+    scope: normalizeText(approval?.scope) || null,
+    requestedAction: normalizeText(approval?.requestedAction) || null,
+    riskLevel: normalizeText(approval?.riskLevel) || "medium",
+    status: normalizeApprovalStatus(approval?.status),
+    grantedBy: normalizeText(approval?.grantedBy) || null,
+    grantedAt: normalizeText(approval?.grantedAt) || null,
+    rejectedAt: normalizeText(approval?.rejectedAt) || null,
+    resolutionNote: normalizeText(approval?.resolutionNote) || null,
+    createdAt,
+    updatedAt: normalizeText(approval?.updatedAt) || createdAt,
+  };
+}
+
 function inferAgentModeFromConversations(conversations) {
   if (!Array.isArray(conversations) || conversations.length === 0) {
     return "offline";
@@ -107,7 +774,14 @@ function inferAgentModeFromConversations(conversations) {
 class JsonStore {
   constructor(filePath) {
     this.filePath = filePath;
-    this.state = { conversations: [] };
+    this.state = {
+      conversations: [],
+      employees: [],
+      workspaces: [],
+      tasks: [],
+      approvals: [],
+      manager: buildDefaultManagerState(),
+    };
     this.writeQueue = Promise.resolve();
   }
 
@@ -117,11 +791,29 @@ class JsonStore {
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.conversations)) {
-        this.state = parsed;
-      } else {
+      if (!Array.isArray(parsed.conversations)) {
         await this.persist();
+        return;
       }
+
+      this.state = {
+        conversations: parsed.conversations,
+        employees: Array.isArray(parsed.employees)
+          ? parsed.employees.map((employee) => normalizeStoredEmployeeRecord(employee)).filter(Boolean)
+          : [],
+        workspaces: Array.isArray(parsed.workspaces)
+          ? parsed.workspaces
+              .map((workspace, index) => normalizeStoredWorkspaceRecord(workspace, index))
+              .filter(Boolean)
+          : [],
+        tasks: Array.isArray(parsed.tasks)
+          ? parsed.tasks.map((task) => normalizeStoredTaskRecord(task)).filter(Boolean)
+          : [],
+        approvals: Array.isArray(parsed.approvals)
+          ? parsed.approvals.map((approval) => normalizeApprovalRecord(approval)).filter(Boolean)
+          : [],
+        manager: normalizeManagerState(parsed.manager),
+      };
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
@@ -140,6 +832,261 @@ class JsonStore {
 
   listConversations() {
     return this.state.conversations;
+  }
+
+  listWorkspaces() {
+    return this.state.workspaces;
+  }
+
+  listEmployees() {
+    return this.state.employees;
+  }
+
+  getEmployee(employeeId) {
+    return this.state.employees.find((employee) => employee.id === employeeId) || null;
+  }
+
+  async upsertEmployee(employee) {
+    const nextEmployee = normalizeStoredEmployeeRecord(employee);
+    const index = this.state.employees.findIndex((item) => item.id === nextEmployee.id);
+    if (index === -1) {
+      this.state.employees.push(nextEmployee);
+    } else {
+      this.state.employees[index] = {
+        ...this.state.employees[index],
+        ...nextEmployee,
+      };
+    }
+    await this.persist();
+    return nextEmployee;
+  }
+
+  async updateEmployee(employeeId, patch) {
+    const employee = this.getEmployee(employeeId);
+    if (!employee) {
+      return null;
+    }
+
+    const nextEmployee = normalizeStoredEmployeeRecord({
+      ...employee,
+      ...patch,
+      id: employee.id,
+      updatedAt: patch?.updatedAt || new Date().toISOString(),
+    });
+    Object.assign(employee, nextEmployee);
+    await this.persist();
+    return employee;
+  }
+
+  async markEmployeeOffline(employeeId) {
+    const employee = this.getEmployee(employeeId);
+    if (!employee) {
+      return null;
+    }
+
+    employee.online = false;
+    employee.status = employee.currentTaskId ? employee.status || "offline" : "offline";
+    employee.updatedAt = new Date().toISOString();
+    employee.lastSeenAt = employee.updatedAt;
+    await this.persist();
+    return employee;
+  }
+
+  getWorkspace(workspaceId) {
+    return this.state.workspaces.find((workspace) => workspace.id === workspaceId);
+  }
+
+  listWorkspacesByEmployee(employeeId) {
+    return this.state.workspaces.filter((workspace) => workspace.employeeId === employeeId);
+  }
+
+  findWorkspaceByEmployeeAndPath(employeeId, pathValue) {
+    const normalizedPath = normalizeText(pathValue);
+    if (!normalizedPath) {
+      return null;
+    }
+
+    return (
+      this.state.workspaces.find(
+        (workspace) =>
+          workspace.employeeId === employeeId && normalizeText(workspace.path) === normalizedPath
+      ) || null
+    );
+  }
+
+  async upsertWorkspaces(workspaces) {
+    if (!Array.isArray(workspaces) || workspaces.length === 0) {
+      return [];
+    }
+
+    let changed = false;
+    const now = new Date().toISOString();
+
+    for (const [index, workspace] of workspaces.entries()) {
+      const nextWorkspace = normalizeStoredWorkspaceRecord(
+        {
+          ...workspace,
+          updatedAt: workspace?.updatedAt || now,
+        },
+        index
+      );
+      const existingIndex = this.state.workspaces.findIndex((item) => item.id === nextWorkspace.id);
+
+      if (existingIndex === -1) {
+        this.state.workspaces.push(nextWorkspace);
+        changed = true;
+        continue;
+      }
+
+      this.state.workspaces[existingIndex] = {
+        ...this.state.workspaces[existingIndex],
+        ...nextWorkspace,
+      };
+      changed = true;
+    }
+
+    if (changed) {
+      await this.persist();
+    }
+
+    return workspaces;
+  }
+
+  async markEmployeeWorkspacesOffline(employeeId) {
+    if (!employeeId) {
+      return;
+    }
+
+    let changed = false;
+    const updatedAt = new Date().toISOString();
+
+    for (const workspace of this.state.workspaces) {
+      if (workspace.employeeId !== employeeId || workspace.online === false) {
+        continue;
+      }
+
+      workspace.online = false;
+      workspace.updatedAt = updatedAt;
+      changed = true;
+    }
+
+    if (changed) {
+      await this.persist();
+    }
+  }
+
+  listTasks() {
+    return this.state.tasks;
+  }
+
+  listApprovals() {
+    return this.state.approvals;
+  }
+
+  listPendingApprovals() {
+    return this.state.approvals.filter((approval) => approval.status === "pending");
+  }
+
+  getApproval(approvalId) {
+    return this.state.approvals.find((approval) => approval.id === approvalId) || null;
+  }
+
+  async createApproval(approval) {
+    const nextApproval = normalizeApprovalRecord(approval);
+    this.state.approvals.push(nextApproval);
+    await this.persist();
+    return nextApproval;
+  }
+
+  async updateApproval(approvalId, patch) {
+    const approval = this.getApproval(approvalId);
+    if (!approval) {
+      return null;
+    }
+
+    const nextApproval = normalizeApprovalRecord({
+      ...approval,
+      ...patch,
+      id: approval.id,
+      createdAt: approval.createdAt,
+      updatedAt: patch?.updatedAt || new Date().toISOString(),
+    });
+    Object.assign(approval, nextApproval);
+    await this.persist();
+    return approval;
+  }
+
+  getTask(taskId) {
+    return this.state.tasks.find((task) => task.id === taskId);
+  }
+
+  listTasksByEmployee(employeeId) {
+    return this.state.tasks.filter((task) => task.ownerEmployeeId === employeeId);
+  }
+
+  listTasksByConversation(conversationId) {
+    return this.state.tasks.filter((task) => task.sourceConversationId === conversationId);
+  }
+
+  getLatestTaskForConversation(conversationId) {
+    return this.listTasksByConversation(conversationId).sort(compareByRecency)[0] || null;
+  }
+
+  findTaskBySourceMessageId(messageId) {
+    return this.state.tasks.find((task) => task.sourceMessageId === messageId) || null;
+  }
+
+  async createTask(task) {
+    const nextTask = normalizeStoredTaskRecord(task);
+    this.state.tasks.push(nextTask);
+    await this.persist();
+    return nextTask;
+  }
+
+  async updateTask(taskId, patch) {
+    const task = this.getTask(taskId);
+    if (!task) {
+      return null;
+    }
+
+    const nextTask = normalizeStoredTaskRecord({
+      ...task,
+      ...patch,
+      id: task.id,
+      createdAt: task.createdAt,
+      updatedAt: patch?.updatedAt || new Date().toISOString(),
+    });
+    Object.assign(task, nextTask);
+    await this.persist();
+    return task;
+  }
+
+  async deleteTasksByConversationId(conversationId) {
+    const removedTaskIds = this.state.tasks
+      .filter((task) => task.sourceConversationId === conversationId)
+      .map((task) => task.id);
+    const before = this.state.tasks.length;
+    this.state.tasks = this.state.tasks.filter((task) => task.sourceConversationId !== conversationId);
+    if (removedTaskIds.length > 0) {
+      this.state.approvals = this.state.approvals.filter(
+        (approval) => !removedTaskIds.includes(approval.taskId)
+      );
+    }
+    if (this.state.tasks.length !== before || removedTaskIds.length > 0) {
+      await this.persist();
+    }
+  }
+
+  getManagerState() {
+    if (!this.state.manager) {
+      this.state.manager = buildDefaultManagerState();
+    }
+
+    return this.state.manager;
+  }
+
+  listManagerMessages() {
+    return this.getManagerState().messages;
   }
 
   listConversationsByAgent(agentId) {
@@ -174,6 +1121,7 @@ class JsonStore {
       updatedAt: now,
       deviceId: normalizeText(options.deviceId) || null,
       deviceName: normalizeText(options.deviceName) || null,
+      workspaceId: normalizeText(options.workspaceId) || null,
       codexWorkdir: normalizeText(options.codexWorkdir) || null,
       codexSessionId: normalizeText(options.codexSessionId) || null,
       codexThreadName: normalizeText(options.codexThreadName) || null,
@@ -208,6 +1156,7 @@ class JsonStore {
 
     const [conversation] = this.state.conversations.splice(index, 1);
     await this.persist();
+    await this.deleteTasksByConversationId(conversationId);
     return conversation;
   }
 
@@ -221,6 +1170,29 @@ class JsonStore {
     conversation.updatedAt = message.createdAt;
     await this.persist();
     return message;
+  }
+
+  async addManagerMessage(message) {
+    const nextMessage = normalizeManagerMessage(message);
+    this.getManagerState().messages.push(nextMessage);
+    await this.persist();
+    return nextMessage;
+  }
+
+  async updateManagerMessage(messageId, patch) {
+    const message = this.getManagerState().messages.find((item) => item.id === messageId);
+    if (!message) {
+      return null;
+    }
+
+    Object.assign(message, patch);
+    await this.persist();
+    return message;
+  }
+
+  async setManagerPreviousResponseId(previousResponseId) {
+    this.getManagerState().previousResponseId = normalizeText(previousResponseId) || null;
+    await this.persist();
   }
 
   async updateMessage(conversationId, messageId, patch) {
@@ -268,50 +1240,122 @@ class JsonStore {
 
   buildSnapshot(connectedAgents) {
     const clonedConversations = structuredClone(this.state.conversations)
-      .map((conversation) => ({
-        ...conversation,
-        messages: [...conversation.messages].sort(
-          (left, right) =>
-            new Date(left.createdAt).getTime() -
-            new Date(right.createdAt).getTime()
-        ),
-      }))
+      .map((conversation) => {
+        const messageWindow = buildSnapshotMessageWindow(
+          conversation.messages,
+          SNAPSHOT_CONVERSATION_MESSAGE_LIMIT
+        );
+
+        return {
+          ...conversation,
+          messages: messageWindow.messages,
+          totalMessageCount: messageWindow.totalMessageCount,
+          hiddenMessageCount: messageWindow.hiddenMessageCount,
+        };
+      })
       .sort(
         (left, right) =>
           new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
       );
 
+    const workspaceMap = new Map(
+      structuredClone(this.state.workspaces || [])
+        .map((workspace, index) => normalizeStoredWorkspaceRecord(workspace, index))
+        .filter(Boolean)
+        .map((workspace) => [workspace.id, workspace])
+    );
+
+    for (const connection of connectedAgents.values()) {
+      for (const workspace of connection.workspaces || []) {
+        workspaceMap.set(workspace.id, {
+          ...workspaceMap.get(workspace.id),
+          ...normalizeStoredWorkspaceRecord(workspace),
+          employeeId: normalizeText(workspace.employeeId || connection.agentId) || null,
+          employeeName: normalizeText(workspace.employeeName || connection.name) || null,
+          deviceId: normalizeDeviceId(workspace.deviceId || connection.deviceId),
+          deviceName: normalizeDeviceName(workspace.deviceName || connection.deviceName),
+          online: true,
+          updatedAt:
+            normalizeText(workspace.updatedAt) ||
+            connection.lastSeenAt ||
+            new Date().toISOString(),
+        });
+      }
+    }
+
+    const persistedEmployees = structuredClone(this.state.employees || [])
+      .map((employee) => normalizeStoredEmployeeRecord(employee))
+      .filter(Boolean);
+
     const knownAgentIds = new Set([
+      ...persistedEmployees.map((employee) => employee.id),
       ...clonedConversations.map((conversation) => conversation.agentId),
       ...connectedAgents.keys(),
+      ...[...workspaceMap.values()].map((workspace) => workspace.employeeId).filter(Boolean),
+      ...this.state.tasks.map((task) => task.ownerEmployeeId).filter(Boolean),
     ]);
 
     const agents = [...knownAgentIds]
       .map((agentId) => {
         const connection = connectedAgents.get(agentId);
+        const persistedEmployee =
+          persistedEmployees.find((employee) => employee.id === agentId) || null;
         const agentConversations = clonedConversations.filter(
           (conversation) => conversation.agentId === agentId
         );
         const recentConversation = agentConversations[0] || null;
+        const persistedWorkspaces = [...workspaceMap.values()]
+          .filter((workspace) => workspace.employeeId === agentId)
+          .sort(compareByRecency);
+        const referenceWorkspace = persistedWorkspaces[0] || null;
         const deviceId = normalizeDeviceId(
-          connection?.deviceId || recentConversation?.deviceId,
+          connection?.deviceId || recentConversation?.deviceId || referenceWorkspace?.deviceId,
           "default-device"
         );
         const deviceName = normalizeDeviceName(
-          connection?.deviceName || recentConversation?.deviceName,
+          connection?.deviceName ||
+            recentConversation?.deviceName ||
+            referenceWorkspace?.deviceName,
           "当前设备"
         );
         return {
           id: agentId,
-          name: connection?.name || agentId,
+          name:
+            connection?.name ||
+            persistedEmployee?.name ||
+            referenceWorkspace?.employeeName ||
+            agentId,
           deviceId,
           deviceName,
-          mode: connection?.mode || inferAgentModeFromConversations(agentConversations),
+          mode:
+            connection?.mode ||
+            persistedEmployee?.runtime ||
+            referenceWorkspace?.runtimeHints?.[0] ||
+            inferAgentModeFromConversations(agentConversations),
+          runtime:
+            connection?.mode ||
+            persistedEmployee?.runtime ||
+            referenceWorkspace?.runtimeHints?.[0] ||
+            inferAgentModeFromConversations(agentConversations),
+          version: persistedEmployee?.version || null,
+          capabilities: persistedEmployee?.capabilities || [],
           recentCodexSessions: connection?.recentCodexSessions || [],
           defaultCodexWorkdir: connection?.defaultCodexWorkdir || null,
           workdirRoots: connection?.workdirRoots || [],
-          online: Boolean(connection),
-          lastSeenAt: connection?.lastSeenAt || null,
+          workspaces: persistedWorkspaces,
+          online: Boolean(connection) || persistedWorkspaces.some((workspace) => workspace.online),
+          status:
+            persistedEmployee?.status ||
+            (Boolean(connection) ? "online" : persistedWorkspaces.some((workspace) => workspace.online) ? "online" : "offline"),
+          currentTaskId: persistedEmployee?.currentTaskId || null,
+          currentRunId: persistedEmployee?.currentRunId || null,
+          lastSummary: persistedEmployee?.lastSummary || null,
+          lastSeenAt:
+            connection?.lastSeenAt ||
+            persistedEmployee?.lastSeenAt ||
+            persistedWorkspaces[0]?.updatedAt ||
+            recentConversation?.updatedAt ||
+            null,
         };
       })
       .sort((left, right) => {
@@ -352,11 +1396,68 @@ class JsonStore {
       return left.name.localeCompare(right.name);
     });
 
+    const workspaces = [...workspaceMap.values()].sort((left, right) => {
+      if (left.online !== right.online) {
+        return left.online ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+
+    const agentMap = new Map(agents.map((agent) => [agent.id, agent]));
+    const workspaceLookup = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
+    const conversationMap = new Map(clonedConversations.map((conversation) => [conversation.id, conversation]));
+    const storedTasks = structuredClone(this.state.tasks || [])
+      .map((task) => normalizeStoredTaskRecord(task))
+      .sort(compareByRecency);
+    const tasks = storedTasks
+      .map((task) => buildPersistedTaskDescriptor(task, agentMap, workspaceLookup, conversationMap))
+      .filter(Boolean);
+    const fallbackConversationTasks = clonedConversations
+      .filter(
+        (conversation) =>
+          !storedTasks.some((task) => task.sourceConversationId === conversation.id)
+      )
+      .map((conversation) => buildTaskDescriptor(conversation, agentMap.get(conversation.agentId)))
+      .filter(Boolean)
+      .sort(compareByRecency);
+    tasks.push(...fallbackConversationTasks);
+      tasks.sort(compareByRecency);
+    const approvals = structuredClone(this.state.approvals || [])
+      .map((approval) => normalizeApprovalRecord(approval))
+      .sort(compareByRecency);
+
+    const managerSummary = {
+      onlineAgentCount: agents.filter((agent) => agent.online).length,
+      totalAgentCount: agents.length,
+      activeTaskCount: tasks.filter((task) => task.active).length,
+      blockedTaskCount: tasks.filter((task) => task.blocked).length,
+      recentTaskCount: tasks.length,
+      workspaceCount: workspaces.length,
+      pendingApprovalCount: approvals.filter((approval) => approval.status === "pending").length,
+    };
+
+    const managerMessageWindow = buildSnapshotMessageWindow(
+      this.getManagerState().messages,
+      SNAPSHOT_MANAGER_MESSAGE_LIMIT
+    );
+
     return {
       generatedAt: new Date().toISOString(),
       conversations: clonedConversations,
       agents,
       devices,
+      workspaces,
+      tasks,
+      approvals,
+      manager: {
+        messages: structuredClone(managerMessageWindow.messages),
+        totalMessageCount: managerMessageWindow.totalMessageCount,
+        hiddenMessageCount: managerMessageWindow.hiddenMessageCount,
+        provider: MANAGER_PROVIDER,
+        model: MANAGER_PROVIDER === "local" ? "local-summary" : MANAGER_MODEL,
+        previousResponseId: this.getManagerState().previousResponseId,
+        summary: managerSummary,
+      },
     };
   }
 }
@@ -399,7 +1500,206 @@ function broadcastSnapshot() {
   }
 }
 
-async function deliverMessageToAgent(agentId, conversationId, message) {
+function resolveWorkspaceBinding(agentId, conversation) {
+  const availableWorkspaces = store
+    .listWorkspacesByEmployee(agentId)
+    .sort(compareByRecency);
+  const explicitWorkspaceId = normalizeText(conversation?.workspaceId);
+
+  if (explicitWorkspaceId && store.getWorkspace(explicitWorkspaceId)) {
+    return {
+      workspaceId: explicitWorkspaceId,
+      candidateWorkspaceIds: [],
+    };
+  }
+
+  const codexWorkdir = normalizeText(conversation?.codexWorkdir);
+  if (codexWorkdir) {
+    const exactWorkspace = store.findWorkspaceByEmployeeAndPath(agentId, codexWorkdir);
+    if (exactWorkspace) {
+      return {
+        workspaceId: exactWorkspace.id,
+        candidateWorkspaceIds: [],
+      };
+    }
+  }
+
+  if (availableWorkspaces.length === 1) {
+    return {
+      workspaceId: availableWorkspaces[0].id,
+      candidateWorkspaceIds: [],
+    };
+  }
+
+  return {
+    workspaceId: null,
+    candidateWorkspaceIds: availableWorkspaces.map((workspace) => workspace.id),
+  };
+}
+
+async function createTaskForUserMessage({
+  conversation,
+  message,
+  agentId,
+  agentConnection,
+  taskDraft = null,
+}) {
+  const binding = resolveWorkspaceBinding(agentId, conversation);
+  const now = new Date().toISOString();
+  const draft = taskDraft || null;
+  const task = await store.createTask({
+    title: normalizeText(draft?.title) || buildConversationTitle(message.text, "新任务"),
+    goal: normalizeText(draft?.goal) || message.text,
+    status: agentClients.has(agentId) ? "assigned" : "queued",
+    priority: "normal",
+    workspaceId: binding.workspaceId,
+    ownerEmployeeId: agentId,
+    requestedBy: normalizeText(draft?.requestedBy) || "human",
+    sourceConversationId: conversation.id,
+    sourceMessageId: message.id,
+    directConversationId: conversation.id,
+    createdAt: now,
+    updatedAt: now,
+    latestSummary: agentClients.has(agentId)
+      ? "任务已分派给数字员工，等待开始执行。"
+      : "员工当前离线，任务已进入排队。",
+    managerSummary: normalizeText(draft?.managerSummary) || null,
+    successSignal: normalizeText(draft?.successSignal) || null,
+    labels: Array.isArray(draft?.labels) ? draft.labels : [],
+    candidateWorkspaceIds: binding.candidateWorkspaceIds,
+    deviceId: agentConnection?.deviceId || conversation.deviceId || null,
+    deviceName: agentConnection?.deviceName || conversation.deviceName || null,
+    runStatus: agentClients.has(agentId) ? "accepted" : "queued",
+    approvalState: "not_required",
+  });
+
+  if (binding.workspaceId && conversation.workspaceId !== binding.workspaceId) {
+    await store.updateConversation(conversation.id, {
+      workspaceId: binding.workspaceId,
+    });
+  }
+
+  return task;
+}
+
+async function submitUserTaskToEmployee({
+  agentId,
+  text,
+  requestedConversationId = null,
+  title = null,
+  workspaceId = null,
+  requestedBy = "human",
+  taskDraft = null,
+}) {
+  const agentConnection = agentClients.get(agentId);
+  let conversation = requestedConversationId ? store.getConversation(requestedConversationId) : null;
+
+  if (requestedConversationId && !conversation) {
+    throw new Error("要发送消息的会话不存在");
+  }
+
+  if (!conversation) {
+    const workspace = workspaceId ? store.getWorkspace(workspaceId) : null;
+    conversation = await store.createConversation(agentId, {
+      title: normalizeText(title) || buildConversationTitle(text, "New chat"),
+      deviceId: agentConnection?.deviceId || workspace?.deviceId || null,
+      deviceName: agentConnection?.deviceName || workspace?.deviceName || null,
+      workspaceId: workspaceId || null,
+      codexWorkdir: workspace?.path || null,
+    });
+  } else if (
+    conversation.messages.length === 0 &&
+    !conversation.codexSessionId &&
+    (!conversation.title || conversation.title === "New chat")
+  ) {
+    conversation = await store.updateConversation(conversation.id, {
+      title: normalizeText(title) || buildConversationTitle(text, "New chat"),
+    });
+  }
+
+  if (workspaceId && conversation.workspaceId !== workspaceId) {
+    const workspace = store.getWorkspace(workspaceId);
+    conversation = await store.updateConversation(conversation.id, {
+      workspaceId,
+      codexWorkdir: workspace?.path || conversation.codexWorkdir || null,
+    });
+  } else if (agentConnection && (!conversation.deviceId || !conversation.deviceName)) {
+    conversation = await store.updateConversation(conversation.id, {
+      deviceId: agentConnection.deviceId,
+      deviceName: agentConnection.deviceName,
+    });
+  }
+
+  const message = {
+    id: randomUUID(),
+    role: "user",
+    text,
+    agentId,
+    status: agentClients.has(agentId) ? "sent" : "queued",
+    createdAt: new Date().toISOString(),
+  };
+
+  await store.addMessage(conversation.id, message);
+  const task = await createTaskForUserMessage({
+    conversation,
+    message,
+    agentId,
+    agentConnection,
+    taskDraft,
+  });
+  if (task && normalizeText(requestedBy) && requestedBy !== "human" && !taskDraft) {
+    await store.updateTask(task.id, { requestedBy: normalizeText(requestedBy) });
+  }
+
+  if (agentClients.has(agentId)) {
+    await deliverMessageToAgent(agentId, conversation.id, message, task);
+  }
+
+  return {
+    conversation,
+    message,
+    task,
+  };
+}
+
+function buildTaskAssignmentPayload(task, conversation) {
+  const workspace = task.workspaceId ? store.getWorkspace(task.workspaceId) : null;
+
+  return {
+    type: "task.assigned",
+    task: {
+      id: task.id,
+      title: task.title,
+      goal: task.goal,
+      managerSummary: task.managerSummary || null,
+      successSignal: task.successSignal || null,
+      requestedBy: task.requestedBy || "human",
+      workspace: workspace
+        ? {
+            id: workspace.id,
+            name: workspace.name,
+            path: workspace.path,
+            kind: workspace.kind,
+          }
+        : null,
+      constraints: {
+        sandbox: "workspace-default",
+        humanApprovalRequiredFor: [],
+      },
+      approvalPolicy: {
+        mode: "explicit-risk-only",
+      },
+      directConversationId: conversation.id,
+      sourceMessageId: task.sourceMessageId,
+      candidateWorkspaceIds: task.candidateWorkspaceIds || [],
+    },
+    conversationId: conversation.id,
+    message: conversation.messages.find((item) => item.id === task.sourceMessageId) || null,
+    conversation,
+  };
+}
+
+async function deliverMessageToAgent(agentId, conversationId, message, task = null) {
   const agentConnection = agentClients.get(agentId);
   if (!agentConnection) {
     return false;
@@ -409,15 +1709,27 @@ async function deliverMessageToAgent(agentId, conversationId, message) {
     status: "sent",
     deliveredAt: new Date().toISOString(),
   });
+  if (task) {
+    await store.updateTask(task.id, {
+      status: "assigned",
+      runStatus: "accepted",
+      latestSummary: "任务已送达数字员工，等待开始执行。",
+    });
+  }
 
   const conversation = store.getConversation(conversationId);
-  sendJson(agentConnection.socket, {
-    type: "deliver_user_message",
-    agentId,
-    conversationId,
-    message,
-    conversation,
-  });
+  sendJson(
+    agentConnection.socket,
+    task
+      ? buildTaskAssignmentPayload(task, conversation)
+      : {
+          type: "deliver_user_message",
+          agentId,
+          conversationId,
+          message,
+          conversation,
+        }
+  );
 
   return true;
 }
@@ -441,20 +1753,1599 @@ function updateAgentConnection(agentId, patch) {
 async function flushQueuedMessages(agentId) {
   const queued = store.listQueuedMessages(agentId);
   for (const item of queued) {
-    await deliverMessageToAgent(agentId, item.conversationId, item.message);
+    const task = store.findTaskBySourceMessageId(item.message.id);
+    if (task) {
+      await store.updateTask(task.id, {
+        status: "assigned",
+        runStatus: "accepted",
+        latestSummary: "数字员工已重新连线，任务重新分派。",
+      });
+    }
+    await deliverMessageToAgent(agentId, item.conversationId, item.message, task);
   }
   broadcastSnapshot();
+}
+
+function resolveEmployeeMatches(employeeRef, snapshot) {
+  const reference = normalizeText(employeeRef).toLowerCase();
+  if (!reference) {
+    return [];
+  }
+
+  const exact = snapshot.agents.filter((agent) => {
+    const id = agent.id.toLowerCase();
+    const name = agent.name.toLowerCase();
+    return id === reference || name === reference;
+  });
+  if (exact.length > 0) {
+    return exact;
+  }
+
+  return snapshot.agents.filter((agent) => {
+    const haystacks = [
+      agent.id,
+      agent.name,
+      agent.deviceName,
+      agent.deviceId,
+      `${agent.deviceName} ${agent.name}`,
+    ]
+      .filter(Boolean)
+      .map((value) => value.toLowerCase());
+    return haystacks.some((value) => value.includes(reference));
+  });
+}
+
+function resolveWorkspaceMatches(workspaceRef, snapshot, employeeId = null) {
+  const reference = normalizeText(workspaceRef).toLowerCase();
+  if (!reference) {
+    return [];
+  }
+
+  return (snapshot.workspaces || []).filter((workspace) => {
+    if (employeeId && workspace.employeeId !== employeeId) {
+      return false;
+    }
+
+    const haystacks = [
+      workspace.id,
+      workspace.name,
+      workspace.path,
+      workspace.deviceName,
+      workspace.employeeName,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return haystacks.some((value) => value.includes(reference));
+  });
+}
+
+function resolveWorkspaceSelection(snapshot, employee, workspaceRef = null) {
+  const employeeWorkspaces = (snapshot.workspaces || []).filter(
+    (workspace) => workspace.employeeId === employee.id
+  );
+
+  if (normalizeText(workspaceRef)) {
+    const matches = resolveWorkspaceMatches(workspaceRef, snapshot, employee.id);
+    if (matches.length === 0) {
+      if (employeeWorkspaces.length === 1) {
+        return {
+          ok: true,
+          workspace: employeeWorkspaces[0],
+          autoSelected: true,
+          assumedFromSingleWorkspace: true,
+        };
+      }
+
+      return {
+        ok: false,
+        error: "WORKSPACE_NOT_FOUND",
+        message: "没有找到该员工名下匹配的工作区。",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: "WORKSPACE_AMBIGUOUS",
+        message: "这个工作区描述匹配到多个目标，请更具体一点。",
+        matches: matches.map((workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+          path: workspace.path,
+        })),
+      };
+    }
+
+    return {
+      ok: true,
+      workspace: matches[0],
+      autoSelected: false,
+      assumedFromSingleWorkspace: false,
+    };
+  }
+
+  if (employeeWorkspaces.length === 1) {
+    return {
+      ok: true,
+      workspace: employeeWorkspaces[0],
+      autoSelected: true,
+      assumedFromSingleWorkspace: false,
+    };
+  }
+
+  return {
+    ok: true,
+    workspace: null,
+    autoSelected: false,
+    assumedFromSingleWorkspace: false,
+  };
+}
+
+function extractDelegationGoal(text, agent) {
+  let goal = normalizeText(text);
+  if (!goal || !agent) {
+    return "";
+  }
+
+  const escapedAgentTokens = [
+    agent.name,
+    agent.id,
+    agent.deviceName ? `${agent.deviceName}上的${agent.name}` : null,
+    agent.deviceName ? `${agent.deviceName} ${agent.name}` : null,
+  ]
+    .filter(Boolean)
+    .map((value) => escapeRegex(value));
+
+  if (escapedAgentTokens.length > 0) {
+    const agentPattern = escapedAgentTokens.join("|");
+    const directivePattern = new RegExp(
+      `^(?:请|帮我)?(?:让|安排|交给|派给|交由)\\s*(?:${agentPattern})\\s*(?:去|来|负责|帮我)?\\s*`,
+      "i"
+    );
+    goal = goal.replace(directivePattern, "");
+  }
+
+  goal = goal.replace(/^(?:在|到|去|用)\s*[^，。；;\n]+?\s*(?:工作区|workspace|仓库|repo|目录)\s*/i, "");
+
+  goal = goal
+    .replace(/^(处理|推进|修复|修一下|修下|看一下|看下|整理|负责|跟进)\s*/i, "")
+    .replace(/[。！？!?\s]+$/g, "")
+    .trim();
+
+  return goal;
+}
+
+function extractWorkspaceReference(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return null;
+  }
+
+  const patterns = [
+    /(?:工作区|workspace|仓库|repo|目录)\s*[:：]?\s*([^，。；;\n]+)/i,
+    /(?:在|到|去|用)\s*([^，。；;\n]+?)\s*(?:工作区|workspace|仓库|repo|目录)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const value = normalizeText(match?.[1]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function parseDelegationIntent(text, snapshot) {
+  if (!/(让|安排|交给|派给|交由)/.test(text)) {
+    return null;
+  }
+
+  const employee = findMentionedAgent(snapshot, text);
+  if (!employee) {
+    return {
+      ok: false,
+      error: "EMPLOYEE_NOT_FOUND",
+      message: "我理解你是在分派任务，但还没识别出目标员工。",
+    };
+  }
+
+  const goal = extractDelegationGoal(text, employee);
+  if (!goal) {
+    return {
+      ok: false,
+      error: "GOAL_MISSING",
+      message: `我知道你想把任务交给 ${employee.name}，但还没识别出具体目标。`,
+    };
+  }
+
+  const workspaceRef = extractWorkspaceReference(text);
+  const workspaceSelection = resolveWorkspaceSelection(snapshot, employee, workspaceRef);
+  if (!workspaceSelection.ok) {
+    return workspaceSelection;
+  }
+
+  return {
+    ok: true,
+    employee,
+    goal,
+    workspace: workspaceSelection.workspace || null,
+    autoSelectedWorkspace: workspaceSelection.autoSelected,
+    assumedFromSingleWorkspace: workspaceSelection.assumedFromSingleWorkspace,
+  };
+}
+
+function summarizeEmployee(agent, snapshot) {
+  const currentTask =
+    snapshot.tasks.find((task) => task.agentId === agent.id && task.active) ||
+    snapshot.tasks.find((task) => task.agentId === agent.id) ||
+    null;
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    deviceId: agent.deviceId,
+    deviceName: agent.deviceName,
+    runtime: agent.mode,
+    online: agent.online,
+    lastSeenAt: agent.lastSeenAt,
+    currentTaskId: currentTask?.taskId || currentTask?.id || null,
+    currentTaskTitle: currentTask?.title || null,
+    currentTaskStatus: currentTask?.statusLabel || (agent.online ? "空闲" : "离线"),
+    currentTaskSummary: currentTask?.progressSummary || "当前没有正在推进的任务",
+    conversationId: currentTask?.conversationId || null,
+  };
+}
+
+function formatEmployeeListReply(snapshot) {
+  if (snapshot.agents.length === 0) {
+    return "当前还没有数字员工连上来。";
+  }
+
+  const online = snapshot.agents.filter((agent) => agent.online);
+  const offline = snapshot.agents.filter((agent) => !agent.online);
+  const details = snapshot.agents
+    .map((agent) => {
+      const employee = summarizeEmployee(agent, snapshot);
+      return `${employee.name}（${employee.deviceName}，${employee.online ? "在线" : "离线"}${
+        employee.currentTaskTitle ? `，${employee.currentTaskStatus}：${employee.currentTaskTitle}` : ""
+      }）`;
+    })
+    .join("；");
+
+  return `当前有 ${online.length} 位员工在线，${offline.length} 位离线。${details}`;
+}
+
+function formatTaskListReply(snapshot) {
+  if (snapshot.tasks.length === 0) {
+    return "当前还没有可汇报的任务。";
+  }
+
+  const topTasks = snapshot.tasks.slice(0, 6);
+  return topTasks
+    .map(
+      (task) =>
+        `${task.agentName}（${task.deviceName}）${task.statusLabel}：${task.title}。${task.progressSummary}`
+    )
+    .join("\n");
+}
+
+function formatWorkspaceListReply(snapshot) {
+  if (!Array.isArray(snapshot.workspaces) || snapshot.workspaces.length === 0) {
+    return "当前还没有已登记的工作区。先让设备上的 Codex 员工带着工作区清单接入，我就能按目录和仓库帮你调度。";
+  }
+
+  return snapshot.workspaces
+    .slice(0, 8)
+    .map((workspace) => {
+      const runtimeLabel = workspace.runtimeHints?.length
+        ? `，运行时 ${workspace.runtimeHints.join(" / ")}`
+        : "";
+      const ownerLabel = workspace.employeeName ? `，默认员工 ${workspace.employeeName}` : "";
+      return `${workspace.name}（${workspace.deviceName}，${workspace.kind}${runtimeLabel}${ownerLabel}）：${workspace.path}`;
+    })
+    .join("\n");
+}
+
+function formatApprovalListReply(snapshot) {
+  const pendingApprovals = (snapshot.approvals || []).filter(
+    (approval) => approval.status === "pending"
+  );
+  if (pendingApprovals.length === 0) {
+    return "当前没有等待审批的任务。";
+  }
+
+  return pendingApprovals
+    .slice(0, 6)
+    .map((approval) => {
+      const employee = snapshot.agents.find((agent) => agent.id === approval.requestedByEmployeeId);
+      const task = snapshot.tasks.find((item) => item.taskId === approval.taskId || item.id === approval.taskId);
+      return `${employee?.name || approval.requestedByEmployeeId || "某位员工"} 申请审批：${
+        task?.title || "未命名任务"
+      }。原因：${approval.reason}`;
+    })
+    .join("\n");
+}
+
+function resolveApprovalMatches(snapshot, options = {}) {
+  const approvalRef = normalizeText(options.approvalRef).toLowerCase();
+  const employeeRef = normalizeText(options.employeeRef).toLowerCase();
+  const taskRef = normalizeText(options.taskRef).toLowerCase();
+  const pendingApprovals = (snapshot.approvals || []).filter(
+    (approval) => approval.status === "pending"
+  );
+
+  if (pendingApprovals.length === 0) {
+    return [];
+  }
+
+  if (!approvalRef && !employeeRef && !taskRef) {
+    return pendingApprovals.slice(0, 1);
+  }
+
+  return pendingApprovals.filter((approval) => {
+    const employee = snapshot.agents.find((agent) => agent.id === approval.requestedByEmployeeId);
+    const task = snapshot.tasks.find(
+      (item) => item.taskId === approval.taskId || item.id === approval.taskId
+    );
+    const haystacks = [
+      approval.id,
+      approval.reason,
+      approval.requestedAction,
+      approval.scope,
+      employee?.id,
+      employee?.name,
+      task?.id,
+      task?.taskId,
+      task?.title,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+
+    if (approvalRef && haystacks.some((value) => value.includes(approvalRef))) {
+      return true;
+    }
+
+    if (employeeRef) {
+      const employeeMatched = [employee?.id, employee?.name]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase())
+        .some((value) => value.includes(employeeRef));
+      if (employeeMatched) {
+        return true;
+      }
+    }
+
+    if (taskRef) {
+      const taskMatched = [task?.id, task?.taskId, task?.title]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase())
+        .some((value) => value.includes(taskRef));
+      if (taskMatched) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}
+
+async function resolveApprovalDecision({
+  approvalRef,
+  employeeRef,
+  taskRef,
+  decision,
+  note = "",
+  decidedBy = "manager",
+}) {
+  const snapshot = buildSnapshot();
+  const matches = resolveApprovalMatches(snapshot, {
+    approvalRef,
+    employeeRef,
+    taskRef,
+  });
+
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      error: "APPROVAL_NOT_FOUND",
+      message: "没有找到匹配的待审批项。",
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      error: "APPROVAL_AMBIGUOUS",
+      message: "找到了多个待审批项，需要你更具体一点。",
+      matches: matches.map((approval) => ({
+        id: approval.id,
+        taskId: approval.taskId,
+        requestedByEmployeeId: approval.requestedByEmployeeId,
+        reason: approval.reason,
+      })),
+    };
+  }
+
+  const approval = matches[0];
+  const normalizedDecision = ["approved", "rejected"].includes(normalizeText(decision).toLowerCase())
+    ? normalizeText(decision).toLowerCase()
+    : "approved";
+  const resolutionTimestamp = new Date().toISOString();
+
+  await store.updateApproval(approval.id, {
+    status: normalizedDecision,
+    grantedBy: normalizedDecision === "approved" ? decidedBy : null,
+    grantedAt: normalizedDecision === "approved" ? resolutionTimestamp : null,
+    rejectedAt: normalizedDecision === "rejected" ? resolutionTimestamp : null,
+    resolutionNote: normalizeText(note) || null,
+  });
+
+  const task = approval.taskId ? store.getTask(approval.taskId) : null;
+  if (task) {
+    await store.updateTask(task.id, {
+      status: normalizedDecision === "approved" ? "assigned" : "blocked",
+      runStatus: normalizedDecision === "approved" ? "accepted" : "blocked",
+      approvalState: normalizedDecision,
+      blockedReason: normalizedDecision === "approved" ? null : approval.reason,
+      latestSummary:
+        normalizedDecision === "approved"
+          ? `审批已通过，等待 ${approval.requestedByEmployeeId || "数字员工"} 继续执行。`
+          : `审批被拒绝：${normalizeText(note) || approval.reason}`,
+    });
+
+    const employeeSocket = agentClients.get(task.ownerEmployeeId)?.socket || null;
+    if (employeeSocket) {
+      sendJson(employeeSocket, {
+        type: "approval_resolved",
+        approvalId: approval.id,
+        taskId: task.id,
+        runId: approval.runId || task.runId || `run-${task.id}`,
+        decision: normalizedDecision,
+        note: normalizeText(note) || null,
+      });
+    }
+  }
+
+  if (task?.ownerEmployeeId) {
+    await store.updateEmployee(task.ownerEmployeeId, {
+      status: normalizedDecision === "approved" ? "busy" : "blocked",
+      currentTaskId: task.id,
+      currentRunId: approval.runId || task.runId || `run-${task.id}`,
+      lastSummary:
+        normalizedDecision === "approved"
+          ? `审批已通过：${task.title}`
+          : `审批被拒绝：${normalizeText(note) || approval.reason}`,
+      lastSeenAt: resolutionTimestamp,
+    });
+  }
+
+  return {
+    ok: true,
+    approvalId: approval.id,
+    decision: normalizedDecision,
+    taskId: task?.id || approval.taskId || null,
+    message:
+      normalizedDecision === "approved"
+        ? "我已经批准这项审批，相关员工可以继续推进。"
+        : "我已经拒绝这项审批，并把结果反馈给对应员工。",
+  };
+}
+
+function normalizeStatusReference(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return normalized.replace(/\s+/g, "_");
+}
+
+function resolveTaskMatches(snapshot, taskRef, employeeId = null) {
+  const reference = normalizeText(taskRef).toLowerCase();
+  if (!reference) {
+    return [];
+  }
+
+  const candidates = (snapshot.tasks || []).filter(
+    (task) => !employeeId || task.agentId === employeeId
+  );
+
+  const exact = candidates.filter((task) => {
+    const haystacks = [task.id, task.taskId, task.title]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return haystacks.includes(reference);
+  });
+  if (exact.length > 0) {
+    return exact;
+  }
+
+  return candidates.filter((task) => {
+    const haystacks = [
+      task.id,
+      task.taskId,
+      task.title,
+      task.lastUserText,
+      task.progressSummary,
+      task.workspaceName,
+      task.agentName,
+      task.deviceName,
+      task.managerSummary,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return haystacks.some((value) => value.includes(reference));
+  });
+}
+
+function filterTasksForManager(snapshot, { employeeRef = "", status = "" } = {}) {
+  let tasks = [...(snapshot.tasks || [])];
+
+  if (normalizeText(employeeRef)) {
+    const matches = resolveEmployeeMatches(employeeRef, snapshot);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到这位数字员工。",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "员工名称匹配到多位，请更具体一点。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      };
+    }
+
+    tasks = tasks.filter((task) => task.agentId === matches[0].id);
+  }
+
+  if (normalizeText(status)) {
+    const statusRef = normalizeStatusReference(status);
+    tasks = tasks.filter((task) => {
+      const candidates = [
+        task.status,
+        task.statusLabel,
+        task.runStatus,
+        task.approvalState,
+      ]
+        .filter(Boolean)
+        .map((value) => normalizeStatusReference(value));
+      return candidates.some((value) => value.includes(statusRef));
+    });
+  }
+
+  return {
+    ok: true,
+    tasks,
+  };
+}
+
+async function listEmployeesTool() {
+  const snapshot = buildSnapshot();
+  return {
+    output: {
+      ok: true,
+      employees: snapshot.agents.map((agent) => summarizeEmployee(agent, snapshot)),
+      summary: snapshot.manager.summary,
+    },
+    clientAction: null,
+  };
+}
+
+async function listTasksTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const filtered = filterTasksForManager(snapshot, {
+    employeeRef: args.employee_ref,
+    status: args.status,
+  });
+  if (!filtered.ok) {
+    return {
+      output: filtered,
+      clientAction: null,
+    };
+  }
+
+  return {
+    output: {
+      ok: true,
+      tasks: filtered.tasks.slice(0, 12),
+      summary: snapshot.manager.summary,
+    },
+    clientAction: null,
+  };
+}
+
+async function getTaskStatusTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const matches = resolveTaskMatches(snapshot, args.task_ref);
+
+  if (matches.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "TASK_NOT_FOUND",
+        message: "没有找到对应的任务。",
+      },
+      clientAction: null,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "TASK_AMBIGUOUS",
+        message: "找到了多条可能的任务，需要更具体的任务标题或 ID。",
+        matches: matches.slice(0, 6).map((task) => ({
+          id: task.id,
+          title: task.title,
+          agentName: task.agentName,
+          deviceName: task.deviceName,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const task = matches[0];
+  return {
+    output: {
+      ok: true,
+      task,
+    },
+    clientAction: buildTaskDetailAction(task, {
+      description: "查看这条任务的完整状态、工作区和相关会话，再决定是否继续追问或切到直连。",
+      label: "查看任务详情",
+    }),
+  };
+}
+
+async function listWorkspacesTool(args = {}) {
+  const snapshot = buildSnapshot();
+  let workspaces = [...(snapshot.workspaces || [])];
+
+  if (normalizeText(args.employee_ref)) {
+    const matches = resolveEmployeeMatches(args.employee_ref, snapshot);
+    if (matches.length === 0) {
+      return {
+        output: {
+          ok: false,
+          error: "EMPLOYEE_NOT_FOUND",
+          message: "没有找到这位数字员工。",
+        },
+        clientAction: null,
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        output: {
+          ok: false,
+          error: "EMPLOYEE_AMBIGUOUS",
+          message: "员工名称匹配到多位，请更具体一点。",
+          matches: matches.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            deviceName: agent.deviceName,
+          })),
+        },
+        clientAction: null,
+      };
+    }
+
+    workspaces = workspaces.filter((workspace) => workspace.employeeId === matches[0].id);
+  }
+
+  return {
+    output: {
+      ok: true,
+      workspaces,
+      summary: snapshot.manager.summary,
+    },
+    clientAction: null,
+  };
+}
+
+async function resolveWorkspaceForEmployeeTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const matches = resolveEmployeeMatches(args.employee_ref, snapshot);
+  if (matches.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到这位数字员工。",
+      },
+      clientAction: null,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "员工名称匹配到多位，请更具体一点。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const employee = matches[0];
+  const workspaceSelection = resolveWorkspaceSelection(
+    snapshot,
+    employee,
+    args.workspace_ref
+  );
+
+  return {
+    output: {
+      ok: workspaceSelection.ok,
+      employee: summarizeEmployee(employee, snapshot),
+      workspace: workspaceSelection.workspace || null,
+      autoSelected: Boolean(workspaceSelection.autoSelected),
+      assumedFromSingleWorkspace: Boolean(workspaceSelection.assumedFromSingleWorkspace),
+      matches: workspaceSelection.matches || [],
+      error: workspaceSelection.error || null,
+      message:
+        workspaceSelection.message ||
+        (workspaceSelection.workspace
+          ? `已定位到 ${employee.name} 的工作区 ${workspaceSelection.workspace.name}。`
+          : "当前没有定位到唯一工作区。"),
+    },
+    clientAction: buildEmployeeDetailAction(employee, null, {
+      description: "查看这位员工的详情和最近任务，再决定是否直接下达新任务。",
+      label: `查看 ${employee.name} 的详情`,
+    }),
+  };
+}
+
+async function switchToEmployeeChat(employeeRef) {
+  const snapshot = buildSnapshot();
+  const matches = resolveEmployeeMatches(employeeRef, snapshot);
+  if (matches.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到对应的数字员工。",
+        suggestions: snapshot.agents.map((agent) => agent.name),
+      },
+      clientAction: null,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "找到多位可能的员工，需要你确认。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const agent = matches[0];
+  let conversation = store
+    .listConversationsByAgent(agent.id)
+    .sort(compareByRecency)[0];
+
+  if (!conversation) {
+    conversation = await store.createConversation(agent.id, {
+      title: "New chat",
+      deviceId: agent.deviceId,
+      deviceName: agent.deviceName,
+    });
+    broadcastSnapshot();
+  }
+
+  const currentTask = buildTaskDescriptor(conversation, agent);
+  return {
+    output: {
+      ok: true,
+      agent: summarizeEmployee(agent, buildSnapshot()),
+      conversationId: conversation.id,
+      currentTask,
+      message: `已切到和 ${agent.name} 的直连对话。`,
+    },
+    clientAction: buildEmployeeDetailAction(agent, conversation, {
+      label: `进入与 ${agent.name} 的直连`,
+      description: "跳到该员工的专属会话，继续直接指导他。",
+    }),
+  };
+}
+
+function buildEmployeeDetailAction(agent, conversation = null, overrides = {}) {
+  return {
+    type: "switch_direct",
+    agentId: agent.id,
+    agentName: agent.name,
+    deviceName: agent.deviceName,
+    conversationId: conversation?.id || null,
+    conversationTitle: conversation?.title || "New chat",
+    title: overrides.title || `${agent.name} · ${agent.deviceName}`,
+    description:
+      overrides.description ||
+      "进入该员工的直连页，查看当前任务、上下文和最近对话。",
+    label: overrides.label || `查看 ${agent.name} 的详情`,
+  };
+}
+
+function buildTaskDetailAction(task, overrides = {}) {
+  if (!task?.id) {
+    return null;
+  }
+
+  return {
+    type: "open_task_detail",
+    taskId: task.id,
+    conversationId: task.conversationId || null,
+    agentId: task.agentId || null,
+    agentName: task.agentName || null,
+    deviceName: task.deviceName || null,
+    title: overrides.title || `任务详情 · ${task.title || "未命名任务"}`,
+    description:
+      overrides.description ||
+      "查看这条任务的状态、工作区、最近进展和相关会话，再决定是否要直连员工。",
+    label: overrides.label || "查看任务详情",
+  };
+}
+
+function buildTaskDetailActionFromStoredTask(task, snapshot = buildSnapshot(), overrides = {}) {
+  if (!task?.id) {
+    return null;
+  }
+
+  const agentMap = new Map((snapshot.agents || []).map((item) => [item.id, item]));
+  const workspaceMap = new Map((snapshot.workspaces || []).map((item) => [item.id, item]));
+  const conversationMap = new Map(
+    (snapshot.conversations || []).map((item) => [item.id, item])
+  );
+
+  return buildTaskDetailAction(
+    buildPersistedTaskDescriptor(task, agentMap, workspaceMap, conversationMap),
+    overrides
+  );
+}
+
+function buildApprovalTaskAction(snapshot, approval, overrides = {}) {
+  if (!approval?.taskId) {
+    return null;
+  }
+
+  const task =
+    (snapshot.tasks || []).find((item) => item.id === approval.taskId) ||
+    (snapshot.tasks || []).find((item) => item.taskId === approval.taskId) ||
+    null;
+
+  return buildTaskDetailAction(task, overrides);
+}
+
+async function listApprovalsTool() {
+  const snapshot = buildSnapshot();
+  return {
+    output: {
+      ok: true,
+      approvals: snapshot.approvals || [],
+      summary: snapshot.manager.summary,
+    },
+    clientAction: null,
+  };
+}
+
+async function resolveApprovalTool(args = {}) {
+  return {
+    output: await resolveApprovalDecision({
+      approvalRef: args.approval_ref,
+      employeeRef: args.employee_ref,
+      taskRef: args.task_ref,
+      decision: args.decision,
+      note: args.note,
+      decidedBy: "manager",
+    }),
+    clientAction: null,
+  };
+}
+
+async function assignTaskToEmployeeTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const matches = resolveEmployeeMatches(args.employee_ref, snapshot);
+  if (matches.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到要分派任务的数字员工。",
+      },
+      clientAction: null,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "找到多位可能的数字员工，需要更具体的员工名字。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const employee = matches[0];
+  const workspaceSelection = resolveWorkspaceSelection(snapshot, employee, args.workspace_ref);
+  if (!workspaceSelection.ok) {
+    return {
+      output: workspaceSelection,
+      clientAction: null,
+    };
+  }
+
+  const taskDraft = buildManagerTaskDraft({
+    goal: args.goal,
+    employee,
+    workspace: workspaceSelection.workspace || null,
+    autoSelectedWorkspace: workspaceSelection.autoSelected,
+    assumedFromSingleWorkspace: workspaceSelection.assumedFromSingleWorkspace,
+    taskTitle: args.task_title,
+    successSignal: args.success_signal,
+    requestedBy: "manager",
+  });
+
+  const result = await submitUserTaskToEmployee({
+    agentId: employee.id,
+    text: taskDraft.goal,
+    title: taskDraft.title,
+    workspaceId: workspaceSelection.workspace?.id || null,
+    requestedBy: "manager",
+    taskDraft,
+  });
+  const latestSnapshot = buildSnapshot();
+
+  return {
+    output: {
+      ok: true,
+      employee: summarizeEmployee(employee, latestSnapshot),
+      taskId: result.task?.id || null,
+      conversationId: result.conversation?.id || null,
+      taskDraft,
+      message: taskDraft.managerSummary,
+    },
+    clientAction: buildTaskDetailActionFromStoredTask(result.task, latestSnapshot, {
+      description: "任务已经交给这位员工，先看任务详情；如果需要，再从详情页进入直连。",
+      label: `查看 ${employee.name} 的任务`,
+    }),
+  };
+}
+
+async function getEmployeeStatusTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const matches = resolveEmployeeMatches(args.employee_ref, snapshot);
+  if (matches.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到对应的数字员工。",
+        suggestions: snapshot.agents.map((agent) => agent.name),
+      },
+      clientAction: null,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "找到多位可能的数字员工，需要你确认。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const employee = summarizeEmployee(matches[0], snapshot);
+  const recentConversation = employee.conversationId
+    ? store.getConversation(employee.conversationId)
+    : store.listConversationsByAgent(matches[0].id).sort(compareByRecency)[0] || null;
+  const currentTask =
+    snapshot.tasks.find((task) => task.agentId === matches[0].id && task.active) ||
+    snapshot.tasks.find((task) => task.agentId === matches[0].id) ||
+    null;
+
+  return {
+    output: {
+      ok: true,
+      employee,
+      task: currentTask,
+    },
+    clientAction:
+      buildTaskDetailAction(currentTask, {
+        description: "先查看这位员工当前任务的细节；如果需要，再从详情页进入直连。",
+        label: `查看 ${matches[0].name} 的当前任务`,
+      }) ||
+      buildEmployeeDetailAction(matches[0], recentConversation, {
+        description: "查看这位员工的执行细节；如果需要，你可以继续直接指导他。",
+      }),
+  };
+}
+
+const managerToolRegistry = createManagerToolRegistry({
+  list_employees: listEmployeesTool,
+  list_tasks: listTasksTool,
+  get_task_status: getTaskStatusTool,
+  list_workspaces: listWorkspacesTool,
+  resolve_workspace_for_employee: resolveWorkspaceForEmployeeTool,
+  list_approvals: listApprovalsTool,
+  resolve_approval: resolveApprovalTool,
+  assign_task_to_employee: assignTaskToEmployeeTool,
+  get_employee_status: getEmployeeStatusTool,
+  switch_to_employee_chat: (args) => switchToEmployeeChat(args.employee_ref),
+});
+
+function buildResponsesManagerTools() {
+  return managerToolRegistry.buildResponsesTools();
+}
+
+function buildChatCompletionManagerTools() {
+  return managerToolRegistry.buildChatCompletionTools();
+}
+
+async function executeManagerTool(name, rawArguments) {
+  return managerToolRegistry.execute(name, rawArguments);
+}
+
+async function createOpenAIManagerResponse(input, previousResponseId = null) {
+  return fetchJsonWithTimeout(`${MANAGER_BASE_URL}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${MANAGER_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: MANAGER_MODEL,
+      instructions: MANAGER_PROMPT,
+      input,
+      previous_response_id: previousResponseId || undefined,
+      tools: buildResponsesManagerTools(),
+      parallel_tool_calls: false,
+      reasoning: { effort: MANAGER_REASONING_EFFORT },
+      text: { verbosity: MANAGER_TEXT_VERBOSITY },
+    }),
+  });
+}
+
+function buildManagerChatHistory() {
+  return [
+    { role: "system", content: MANAGER_PROMPT },
+    ...store
+      .listManagerMessages()
+      .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
+      .map((message) => ({
+        role: message.role,
+        content: normalizeText(message.text),
+      })),
+  ];
+}
+
+async function createCompatibleChatManagerResponse(messages) {
+  const payload = {
+    model: MANAGER_MODEL,
+    messages,
+    tools: buildChatCompletionManagerTools(),
+    tool_choice: "auto",
+    temperature: 0.2,
+  };
+
+  if (MANAGER_PROVIDER === "zhipu") {
+    payload.thinking = { type: "disabled" };
+    payload.do_sample = false;
+    payload.max_tokens = 1024;
+  }
+
+  return fetchJsonWithTimeout(`${MANAGER_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${MANAGER_API_KEY}`,
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+function extractManagerResponseText(response) {
+  if (normalizeText(response?.output_text)) {
+    return normalizeText(response.output_text);
+  }
+
+  const textParts = [];
+  for (const item of response?.output || []) {
+    if (item.type !== "message" || !Array.isArray(item.content)) {
+      continue;
+    }
+
+    for (const content of item.content) {
+      if (content.type === "output_text" && normalizeText(content.text)) {
+        textParts.push(normalizeText(content.text));
+      }
+    }
+  }
+
+  return textParts.join("\n").trim();
+}
+
+async function runOpenAIManager(text) {
+  const managerState = store.getManagerState();
+  let previousResponseId = managerState.previousResponseId || null;
+  let response;
+
+  try {
+    response = await createOpenAIManagerResponse(
+      [{ role: "user", content: text }],
+      previousResponseId
+    );
+  } catch (error) {
+    if (!previousResponseId) {
+      throw error;
+    }
+
+    // If the previous response cannot be resumed, start a fresh manager thread.
+    previousResponseId = null;
+    await store.setManagerPreviousResponseId(null);
+    response = await createOpenAIManagerResponse([{ role: "user", content: text }], null);
+  }
+
+  let clientAction = null;
+
+  for (let index = 0; index < MANAGER_MAX_TOOL_LOOPS; index += 1) {
+    const functionCalls = (response.output || []).filter(
+      (item) => item.type === "function_call"
+    );
+    if (functionCalls.length === 0) {
+      break;
+    }
+
+    const toolOutputs = [];
+    for (const call of functionCalls) {
+      const result = await executeManagerTool(call.name, call.arguments);
+      if (!clientAction && result.clientAction) {
+        clientAction = result.clientAction;
+      }
+
+      toolOutputs.push({
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: JSON.stringify(result.output),
+      });
+    }
+
+    response = await createOpenAIManagerResponse(toolOutputs, response.id);
+  }
+
+  await store.setManagerPreviousResponseId(response.id || previousResponseId || null);
+
+  return {
+    text:
+      extractManagerResponseText(response) ||
+      "我已经拿到了当前状态，但这次没有生成可展示的经理回复。",
+    action: clientAction,
+  };
+}
+
+function normalizeChatToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+
+  return toolCalls
+    .map((toolCall) => ({
+      id: normalizeText(toolCall?.id),
+      type: "function",
+      function: {
+        name: normalizeText(toolCall?.function?.name),
+        arguments: normalizeText(toolCall?.function?.arguments) || "{}",
+      },
+    }))
+    .filter((toolCall) => toolCall.id && toolCall.function.name);
+}
+
+function extractCompatibleChatMessage(response) {
+  return response?.choices?.[0]?.message || null;
+}
+
+function extractCompatibleChatText(response) {
+  const content = response?.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return normalizeText(content);
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+
+      if (item?.type === "text") {
+        return item.text;
+      }
+
+      return "";
+    })
+    .map((item) => normalizeText(item))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+async function runCompatibleChatManager() {
+  const workingMessages = buildManagerChatHistory();
+  let response = await createCompatibleChatManagerResponse(workingMessages);
+  let clientAction = null;
+
+  for (let index = 0; index < MANAGER_MAX_TOOL_LOOPS; index += 1) {
+    const assistantMessage = extractCompatibleChatMessage(response);
+    const toolCalls = normalizeChatToolCalls(assistantMessage?.tool_calls);
+
+    if (toolCalls.length === 0) {
+      break;
+    }
+
+    workingMessages.push({
+      role: "assistant",
+      content: typeof assistantMessage?.content === "string" ? assistantMessage.content : "",
+      tool_calls: toolCalls,
+    });
+
+    for (const toolCall of toolCalls) {
+      const result = await executeManagerTool(
+        toolCall.function.name,
+        toolCall.function.arguments
+      );
+      if (!clientAction && result.clientAction) {
+        clientAction = result.clientAction;
+      }
+
+      workingMessages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result.output),
+      });
+    }
+
+    response = await createCompatibleChatManagerResponse(workingMessages);
+  }
+
+  await store.setManagerPreviousResponseId(null);
+
+  return {
+    text:
+      extractCompatibleChatText(response) ||
+      "我已经拿到了当前状态，但这次没有生成可展示的经理回复。",
+    action: clientAction,
+  };
+}
+
+function findMentionedAgent(snapshot, text) {
+  const lowered = normalizeText(text).toLowerCase();
+  if (!lowered) {
+    return null;
+  }
+
+  return [...snapshot.agents]
+    .sort((left, right) => right.name.length - left.name.length)
+    .find((agent) => {
+      const candidates = [agent.name, agent.id, agent.deviceName].filter(Boolean);
+      return candidates.some((item) => lowered.includes(item.toLowerCase()));
+    });
+}
+
+function extractStructuredRef(text, pattern) {
+  const match = String(text || "").match(pattern);
+  return match?.[0] || "";
+}
+
+function describeManagerModelError(error) {
+  const raw = normalizeText(error?.message || "");
+  const lowered = raw.toLowerCase();
+
+  if (
+    lowered.includes("超时") ||
+    lowered.includes("timeout") ||
+    lowered.includes("timed out") ||
+    lowered.includes("aborterror")
+  ) {
+    return "经理层大模型响应超时，当前模型可能不可用、网络不稳，或这把 key 没有匹配到合适的模型资源包。";
+  }
+
+  if (lowered.includes("insufficient_quota")) {
+    return "经理层大模型暂时不可用，当前 API 额度不足。";
+  }
+
+  if (lowered.includes("invalid_api_key")) {
+    return "经理层大模型暂时不可用，当前 API Key 无效。";
+  }
+
+  if (lowered.includes("rate_limit") || lowered.includes("429")) {
+    return "经理层大模型暂时不可用，当前请求过于频繁。";
+  }
+
+  if (
+    (lowered.includes("model") &&
+      (lowered.includes("not found") ||
+        lowered.includes("does not exist") ||
+        lowered.includes("unsupported") ||
+        lowered.includes("invalid") ||
+        lowered.includes("unavailable"))) ||
+    lowered.includes("资源包") ||
+    lowered.includes("套餐") ||
+    lowered.includes("适用于glm") ||
+    lowered.includes("model not found")
+  ) {
+    return "经理层大模型暂时不可用，当前模型可能没有开通，或不在这把 key 的可用资源包内。";
+  }
+
+  if (lowered.includes("401") || lowered.includes("unauthorized")) {
+    return "经理层大模型暂时不可用，当前鉴权失败。";
+  }
+
+  if (lowered.includes("403") || lowered.includes("permission")) {
+    return "经理层大模型暂时不可用，当前权限不足。";
+  }
+
+  return "经理层大模型暂时不可用，我先回退到本地摘要继续工作。";
+}
+
+async function runLocalManager(text) {
+  const snapshot = buildSnapshot();
+  const mentionedAgent = findMentionedAgent(snapshot, text);
+  const isApprovalDecision = /(批准|同意|通过|驳回|拒绝)/.test(text);
+
+  if (isApprovalDecision) {
+    const explicitApprovalId = extractStructuredRef(
+      text,
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
+    );
+    const decision = /(驳回|拒绝)/.test(text) ? "rejected" : "approved";
+    const result = await resolveApprovalDecision({
+      approvalRef: explicitApprovalId || null,
+      employeeRef: mentionedAgent?.name || null,
+      taskRef: explicitApprovalId ? null : text,
+      decision,
+      note: text,
+      decidedBy: "manager",
+    });
+
+    return {
+      text: result.message || "审批结果已记录。",
+      action: null,
+      };
+  }
+
+  const delegationIntent = parseDelegationIntent(text, snapshot);
+  if (delegationIntent) {
+    if (!delegationIntent.ok) {
+      return {
+        text: delegationIntent.message || "我理解你在分派任务，但还缺少必要信息。",
+        action: null,
+      };
+    }
+
+    const assignment = await assignTaskToEmployeeTool({
+      employee_ref: delegationIntent.employee.name,
+      goal: delegationIntent.goal,
+      workspace_ref: delegationIntent.workspace?.name || delegationIntent.workspace?.path || "",
+    });
+    if (!assignment.output?.ok) {
+      return {
+        text: assignment.output?.message || "这次任务分派没有成功。",
+        action: null,
+      };
+    }
+
+    return {
+      text:
+        assignment.output?.message ||
+        `已把任务“${delegationIntent.goal}”交给 ${delegationIntent.employee.name}。`,
+      action: assignment.clientAction,
+    };
+  }
+
+  if (/(切到|直连|对话)/.test(text)) {
+    if (!mentionedAgent) {
+      return {
+        text: `我可以帮你切到具体员工的直连，但我还没识别出目标。当前员工有：${snapshot.agents
+          .map((agent) => agent.name)
+          .join("、")}。`,
+        action: null,
+      };
+    }
+
+    const result = await switchToEmployeeChat(mentionedAgent.name);
+    if (!result.output.ok) {
+      return {
+        text: result.output.message || "我还没找到要切换的员工。",
+        action: null,
+      };
+    }
+
+    const taskTitle =
+      result.output.currentTask?.title || result.output.agent.currentTaskTitle || "暂无明确任务";
+    return {
+      text: `已切到和 ${mentionedAgent.name} 的直连对话。当前他正在处理“${taskTitle}”。`,
+      action: result.clientAction,
+    };
+  }
+
+  if (mentionedAgent && /(进度|在做|干啥|做啥|状态)/.test(text)) {
+    const result = await getEmployeeStatusTool({
+      employee_ref: mentionedAgent.name,
+    });
+    const employee = result.output?.employee || summarizeEmployee(mentionedAgent, snapshot);
+    const currentTask = result.output?.task || null;
+    return {
+      text: `${employee.name} 当前在 ${employee.deviceName} 上，${
+        employee.online ? "在线" : "离线"
+      }。${
+        employee.currentTaskTitle
+          ? `他现在的任务是“${employee.currentTaskTitle}”，状态是 ${employee.currentTaskStatus}。${employee.currentTaskSummary}`
+          : "当前没有正在推进的任务。"
+      }`,
+      action: result.clientAction,
+    };
+  }
+
+  if (/(任务|进度|状态|做到哪|完成没|卡住)/.test(text)) {
+    const result = await getTaskStatusTool({
+      task_ref: text,
+    });
+
+    if (result.output?.ok && result.output.task) {
+      const task = result.output.task;
+      return {
+        text: `${task.title} 当前由 ${task.agentName || "未分配员工"} 在 ${
+          task.deviceName || "当前设备"
+        } 上推进，状态是 ${task.statusLabel}。${task.progressSummary}${
+          task.blockedReason ? ` 当前阻塞原因：${task.blockedReason}。` : ""
+        }`,
+        action: result.clientAction,
+      };
+    }
+  }
+
+  if (/(员工|agent|谁在线|有哪些)/i.test(text)) {
+    return {
+      text: formatEmployeeListReply(snapshot),
+      action: null,
+    };
+  }
+
+  if (/(做什么|最忙|卡住|任务|进度)/.test(text)) {
+    return {
+      text: formatTaskListReply(snapshot),
+      action: null,
+    };
+  }
+
+  if (/(工作区|workspace|目录|仓库|repo)/i.test(text)) {
+    return {
+      text: formatWorkspaceListReply(snapshot),
+      action: null,
+    };
+  }
+
+  if (/(审批|授权|批准|风险)/.test(text)) {
+    const pendingApprovals = (snapshot.approvals || []).filter(
+      (approval) => approval.status === "pending"
+    );
+    return {
+      text: formatApprovalListReply(snapshot),
+      action:
+        pendingApprovals.length === 1
+          ? buildApprovalTaskAction(snapshot, pendingApprovals[0], {
+              description: "这条任务正在等待你的批准或拒绝，先看任务详情和上下文，再做决定。",
+              label: "查看待审批任务",
+            })
+          : null,
+    };
+  }
+
+  return {
+    text: [
+      "我已经接管当前工作台，可以先帮你盘点员工和任务。",
+      formatEmployeeListReply(snapshot),
+      "如果你想继续追某位员工的细节，直接点名问我，我会给你跳转入口。",
+    ].join("\n\n"),
+    action: null,
+  };
+}
+
+async function runManager(text) {
+  if (MANAGER_PROVIDER === "openai") {
+    try {
+      return await runOpenAIManager(text);
+    } catch (error) {
+      const fallback = await runLocalManager(text);
+      return {
+        text: [
+          `${describeManagerModelError(error)} 已自动回退到本地摘要。`,
+          fallback.text,
+        ].join("\n\n"),
+        action: fallback.action || null,
+      };
+    }
+  }
+
+  if (["zhipu", "openai-compatible"].includes(MANAGER_PROVIDER)) {
+    try {
+      return await runCompatibleChatManager(text);
+    } catch (error) {
+      const fallback = await runLocalManager(text);
+      return {
+        text: [
+          `${describeManagerModelError(error)} 已自动回退到本地摘要。`,
+          fallback.text,
+        ].join("\n\n"),
+        action: fallback.action || null,
+      };
+    }
+  }
+
+  return runLocalManager(text);
+}
+
+let managerQueue = Promise.resolve();
+
+function enqueueManagerTask(task) {
+  const nextTask = managerQueue.then(task, task);
+  managerQueue = nextTask.catch(() => {});
+  return nextTask;
 }
 
 app.use(express.json());
 app.use(express.static(join(__dirname, "..", "public")));
 
 app.get("/api/health", (_request, response) => {
+  const snapshot = buildSnapshot();
   response.json({
     ok: true,
     port: PORT,
     onlineAgents: [...agentClients.keys()],
     conversationCount: store.listConversations().length,
+    managerProvider: MANAGER_PROVIDER,
+    workspaceCount: snapshot.workspaces?.length || 0,
+    taskCount: snapshot.tasks?.length || 0,
+    pendingApprovalCount: snapshot.approvals?.filter((item) => item.status === "pending").length || 0,
   });
 });
 
@@ -498,7 +3389,11 @@ wss.on("connection", (socket) => {
         return;
       }
 
-      if (payload.type === "hello" && payload.role === "agent") {
+      const isAgentRegistration =
+        (payload.type === "hello" && payload.role === "agent") ||
+        payload.type === "employee.register";
+
+      if (isAgentRegistration) {
         if (!isExpectedToken(AGENT_TOKEN, payload.token)) {
           sendJson(socket, {
             type: "error",
@@ -508,24 +3403,52 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        const agentId = payload.agentId || "local-ai";
+        const agentId = payload.agentId || payload.employeeId || "local-ai";
+        const agentName = payload.employeeName || payload.name || agentId;
+        const runtime = payload.runtime || payload.mode || "echo";
         socket.clientRole = "agent";
         socket.authenticated = true;
         socket.agentId = agentId;
 
-        agentClients.set(agentId, {
-          socket,
-          name: payload.name || agentId,
+        const normalizedWorkspaces = normalizeWorkspaceList(payload.workspaces, {
+          agentId,
+          name: agentName,
           deviceId: normalizeDeviceId(payload.deviceId),
           deviceName: normalizeDeviceName(payload.deviceName),
-          mode: payload.mode || "echo",
+          mode: runtime,
+          online: true,
+        });
+
+        agentClients.set(agentId, {
+          socket,
+          name: agentName,
+          deviceId: normalizeDeviceId(payload.deviceId),
+          deviceName: normalizeDeviceName(payload.deviceName),
+          mode: runtime,
           recentCodexSessions: normalizeCodexSessions(payload.recentCodexSessions),
           defaultCodexWorkdir: normalizeText(payload.defaultCodexWorkdir) || null,
           workdirRoots: Array.isArray(payload.workdirRoots)
             ? payload.workdirRoots.map((value) => normalizeText(value)).filter(Boolean)
             : [],
+          workspaces: normalizedWorkspaces,
           lastSeenAt: new Date().toISOString(),
         });
+        await store.upsertEmployee({
+          id: agentId,
+          name: agentName,
+          deviceId: normalizeDeviceId(payload.deviceId),
+          deviceName: normalizeDeviceName(payload.deviceName),
+          runtime,
+          version: normalizeText(payload.version) || null,
+          capabilities: Array.isArray(payload.capabilities)
+            ? payload.capabilities.map((value) => normalizeText(value)).filter(Boolean)
+            : [],
+          status: "idle",
+          online: true,
+          lastSeenAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        await store.upsertWorkspaces(normalizedWorkspaces);
 
         sendJson(socket, {
           type: "hello_ack",
@@ -649,29 +3572,80 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      if (payload.type === "manager_message" && socket.clientRole === "app") {
+        const text = normalizeText(payload.text);
+        if (!text) {
+          sendJson(socket, {
+            type: "error",
+            message: "发送给 AI经理 的消息不能为空",
+          });
+          return;
+        }
+
+        const userMessage = await store.addManagerMessage({
+          id: randomUUID(),
+          role: "user",
+          text,
+          status: "processing",
+          createdAt: new Date().toISOString(),
+        });
+        broadcastSnapshot();
+
+        enqueueManagerTask(async () => {
+          try {
+            const result = await runManager(text);
+            await store.updateManagerMessage(userMessage.id, {
+              status: "answered",
+              answeredAt: new Date().toISOString(),
+              errorMessage: null,
+            });
+            await store.addManagerMessage({
+              id: randomUUID(),
+              role: "assistant",
+              text: result.text,
+              action: result.action || null,
+              createdAt: new Date().toISOString(),
+            });
+            broadcastSnapshot();
+
+            if (result.action && socket.readyState === 1) {
+              sendJson(socket, {
+                type: "manager_action_requested",
+                action: result.action,
+              });
+            }
+          } catch (error) {
+            await store.updateManagerMessage(userMessage.id, {
+              status: "failed",
+              failedAt: new Date().toISOString(),
+              errorMessage: error.message || "AI经理 暂时不可用",
+            });
+            await store.addManagerMessage({
+              id: randomUUID(),
+              role: "assistant",
+              text: `AI经理 这次没能完成处理：${error.message || "未知错误"}`,
+              createdAt: new Date().toISOString(),
+            });
+            broadcastSnapshot();
+          }
+        });
+        return;
+      }
+
       if (payload.type === "user_message" && socket.clientRole === "app") {
         const text = normalizeText(payload.text);
         const requestedAgentId = normalizeText(payload.agentId);
         const requestedConversationId = normalizeText(payload.conversationId);
-
         let conversation = requestedConversationId
           ? store.getConversation(requestedConversationId)
           : null;
         let agentId = requestedAgentId;
 
-        if (requestedConversationId && !conversation) {
-          sendJson(socket, {
-            type: "error",
-            message: "要发送消息的会话不存在",
-          });
-          return;
+        if (!text || !agentId) {
+          if (conversation) {
+            agentId = conversation.agentId;
+          }
         }
-
-        if (conversation) {
-          agentId = conversation.agentId;
-        }
-
-        const agentConnection = agentId ? agentClients.get(agentId) : null;
 
         if (!text || !agentId) {
           sendJson(socket, {
@@ -681,45 +3655,12 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        if (!conversation) {
-          conversation = await store.createConversation(agentId, {
-            title: buildConversationTitle(text, "New chat"),
-            deviceId: agentConnection?.deviceId || null,
-            deviceName: agentConnection?.deviceName || null,
-          });
-        } else if (
-          conversation.messages.length === 0 &&
-          !conversation.codexSessionId &&
-          (!conversation.title || conversation.title === "New chat")
-        ) {
-          conversation = await store.updateConversation(conversation.id, {
-            title: buildConversationTitle(text, "New chat"),
-          });
-        } else if (
-          agentConnection &&
-          (!conversation.deviceId || !conversation.deviceName)
-        ) {
-          conversation = await store.updateConversation(conversation.id, {
-            deviceId: agentConnection.deviceId,
-            deviceName: agentConnection.deviceName,
-          });
-        }
-
-        const message = {
-          id: randomUUID(),
-          role: "user",
-          text,
+        await submitUserTaskToEmployee({
           agentId,
-          status: agentClients.has(agentId) ? "sent" : "queued",
-          createdAt: new Date().toISOString(),
-        };
-
-        await store.addMessage(conversation.id, message);
-
-        if (agentClients.has(agentId)) {
-          await deliverMessageToAgent(agentId, conversation.id, message);
-        }
-
+          text,
+          requestedConversationId,
+          requestedBy: "human",
+        });
         broadcastSnapshot();
         return;
       }
@@ -747,6 +3688,25 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      if (payload.type === "approval_decision" && socket.clientRole === "app") {
+        const result = await resolveApprovalDecision({
+          approvalRef: normalizeText(payload.approvalId) || null,
+          employeeRef: normalizeText(payload.employeeRef) || null,
+          taskRef: normalizeText(payload.taskId) || null,
+          decision: normalizeText(payload.decision) || "approved",
+          note: normalizeText(payload.note) || "",
+          decidedBy: "human",
+        });
+
+        sendJson(socket, {
+          type: "approval_decision_result",
+          approvalId: normalizeText(payload.approvalId) || null,
+          result,
+        });
+        broadcastSnapshot();
+        return;
+      }
+
       if (payload.type === "agent_codex_sessions" && socket.clientRole === "agent") {
         const agentId = socket.agentId;
         if (!agentId) {
@@ -755,6 +3715,30 @@ wss.on("connection", (socket) => {
 
         updateAgentConnection(agentId, {
           recentCodexSessions: normalizeCodexSessions(payload.sessions),
+        });
+        broadcastSnapshot();
+        return;
+      }
+
+      if (payload.type === "agent_heartbeat" && socket.clientRole === "agent") {
+        const agentId = socket.agentId;
+        if (!agentId) {
+          return;
+        }
+
+        const currentTaskId = normalizeText(payload.currentTaskId) || null;
+        const currentRunId = normalizeText(payload.currentRunId) || null;
+        const status = normalizeText(payload.status) || (currentTaskId ? "busy" : "idle");
+        const lastSummary = normalizeText(payload.summary) || null;
+
+        updateAgentConnection(agentId, {});
+        await store.updateEmployee(agentId, {
+          online: true,
+          status,
+          currentTaskId,
+          currentRunId,
+          lastSummary,
+          lastSeenAt: new Date().toISOString(),
         });
         broadcastSnapshot();
         return;
@@ -801,6 +3785,133 @@ wss.on("connection", (socket) => {
         }
 
         await store.updateMessage(conversationId, replyTo, patch);
+        const linkedTask = store.findTaskBySourceMessageId(replyTo);
+        if (linkedTask) {
+          await store.updateTask(linkedTask.id, {
+            status:
+              status === "processing"
+                ? "in_progress"
+                : status === "failed"
+                  ? "failed"
+                  : linkedTask.status,
+            runStatus:
+              status === "processing"
+                ? "running"
+                : status === "failed"
+                  ? "failed"
+                  : linkedTask.runStatus,
+            latestSummary:
+              status === "processing"
+                ? "数字员工已开始执行。"
+                : payload.error || linkedTask.latestSummary,
+            blockedReason: status === "failed" ? payload.error || "处理失败" : null,
+          });
+          await store.updateEmployee(socket.agentId, {
+            status: status === "processing" ? "busy" : status === "failed" ? "blocked" : "idle",
+            currentTaskId: status === "failed" ? linkedTask.id : linkedTask.id,
+            currentRunId: linkedTask.runId || `run-${linkedTask.id}`,
+            lastSummary:
+              status === "processing"
+                ? "已进入执行。"
+                : payload.error || linkedTask.latestSummary,
+            lastSeenAt: new Date().toISOString(),
+          });
+        }
+        broadcastSnapshot();
+        return;
+      }
+
+      if (payload.type === "task_progress" && socket.clientRole === "agent") {
+        const replyTo = normalizeText(payload.replyTo);
+        const taskId =
+          normalizeText(payload.taskId) ||
+          (replyTo ? store.findTaskBySourceMessageId(replyTo)?.id : null) ||
+          null;
+        if (!taskId) {
+          return;
+        }
+
+        const task = store.getTask(taskId);
+        if (!task) {
+          return;
+        }
+
+        const nextTaskStatus =
+          normalizeTaskStatus(payload.status, null) ||
+          mapRunStatusToTaskStatus(payload.runStatus) ||
+          task.status;
+
+        await store.updateTask(task.id, {
+          status: nextTaskStatus,
+          runStatus: normalizeRunStatus(payload.runStatus) || task.runStatus,
+          latestSummary: normalizeText(payload.summary) || task.latestSummary,
+          blockedReason:
+            nextTaskStatus === "blocked" || nextTaskStatus === "failed"
+              ? normalizeText(payload.error) || task.blockedReason
+              : null,
+          outputRef:
+            nextTaskStatus === "completed"
+              ? normalizeText(payload.outputRef) || task.outputRef
+              : task.outputRef,
+        });
+        await store.updateEmployee(socket.agentId, {
+          status:
+            nextTaskStatus === "completed"
+              ? "idle"
+              : nextTaskStatus === "failed" || nextTaskStatus === "blocked"
+                ? "blocked"
+                : "busy",
+          currentTaskId: ["completed", "failed", "cancelled"].includes(nextTaskStatus)
+            ? null
+            : task.id,
+          currentRunId:
+            ["completed", "failed", "cancelled"].includes(nextTaskStatus)
+              ? null
+              : normalizeText(payload.runId) || task.runId || `run-${task.id}`,
+          lastSummary: normalizeText(payload.summary) || task.latestSummary,
+          lastSeenAt: new Date().toISOString(),
+        });
+        broadcastSnapshot();
+        return;
+      }
+
+      if (payload.type === "approval.requested" && socket.clientRole === "agent") {
+        const taskId = normalizeText(payload.taskId);
+        if (!taskId) {
+          return;
+        }
+
+        const task = store.getTask(taskId);
+        if (!task) {
+          return;
+        }
+
+        const approval = await store.createApproval({
+          taskId,
+          runId: normalizeText(payload.runId) || task.runId || `run-${task.id}`,
+          requestedByEmployeeId: socket.agentId,
+          reason: normalizeText(payload.reason) || "需要审批",
+          scope: normalizeText(payload.scope) || null,
+          requestedAction: normalizeText(payload.requestedAction) || null,
+          riskLevel: normalizeText(payload.riskLevel) || "medium",
+          status: "pending",
+        });
+
+        await store.updateTask(task.id, {
+          status: "waiting_approval",
+          runStatus: "waiting_approval",
+          approvalState: "pending",
+          approvalReason: approval.reason,
+          latestSummary: `等待审批：${approval.reason}`,
+          blockedReason: approval.reason,
+        });
+        await store.updateEmployee(socket.agentId, {
+          status: "waiting_approval",
+          currentTaskId: task.id,
+          currentRunId: approval.runId || task.runId || `run-${task.id}`,
+          lastSummary: `已发起审批：${approval.reason}`,
+          lastSeenAt: new Date().toISOString(),
+        });
         broadcastSnapshot();
         return;
       }
@@ -809,6 +3920,7 @@ wss.on("connection", (socket) => {
         const text = normalizeText(payload.text);
         const conversationId = normalizeText(payload.conversationId);
         const agentId = socket.agentId;
+        const taskId = normalizeText(payload.taskId);
 
         if (!text || !conversationId || !agentId) {
           return;
@@ -859,6 +3971,28 @@ wss.on("connection", (socket) => {
           });
         }
 
+        const linkedTask =
+          (taskId && store.getTask(taskId)) ||
+          (payload.replyTo ? store.findTaskBySourceMessageId(payload.replyTo) : null);
+        if (linkedTask) {
+          await store.updateTask(linkedTask.id, {
+            status: "completed",
+            runStatus: "completed",
+            latestSummary: text,
+            outputRef: message.id,
+            blockedReason: null,
+            approvalState:
+              linkedTask.approvalState === "pending" ? "approved" : linkedTask.approvalState,
+          });
+          await store.updateEmployee(socket.agentId, {
+            status: "idle",
+            currentTaskId: null,
+            currentRunId: null,
+            lastSummary: `刚完成：${linkedTask.title}`,
+            lastSeenAt: new Date().toISOString(),
+          });
+        }
+
         broadcastSnapshot();
       }
     } catch (error) {
@@ -877,6 +4011,12 @@ wss.on("connection", (socket) => {
 
     if (socket.clientRole === "agent" && socket.agentId) {
       agentClients.delete(socket.agentId);
+      store.markEmployeeOffline(socket.agentId).catch((error) => {
+        console.error("Failed to mark employee offline:", error.message);
+      });
+      store.markEmployeeWorkspacesOffline(socket.agentId).catch((error) => {
+        console.error("Failed to mark employee workspaces offline:", error.message);
+      });
       broadcastSnapshot();
     }
   });

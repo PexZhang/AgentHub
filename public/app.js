@@ -1,5 +1,6 @@
 const UI_PREFS_KEY = "agenthub-ui-prefs-v2";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
+const launchParams = new URLSearchParams(window.location.search);
 
 function buildDefaultUiState() {
   return {
@@ -52,17 +53,32 @@ const state = {
   socket: null,
   devices: [],
   agents: [],
+  tasks: [],
   conversations: [],
+  manager: {
+    messages: [],
+    provider: "local",
+    model: "local-summary",
+    summary: {
+      onlineAgentCount: 0,
+      totalAgentCount: 0,
+      activeTaskCount: 0,
+      blockedTaskCount: 0,
+      recentTaskCount: 0,
+    },
+  },
   activeDeviceId: null,
   activeAgentId: null,
   activeConversationId: null,
   pendingConversationId: null,
+  directFocus: null,
   ui: loadUiState(),
   messageViewport: {
     stickToBottom: true,
     showJumpButton: false,
     lastConversationId: null,
     lastMessageCount: 0,
+    lastRenderSignature: "",
   },
   auth: {
     token: loadStoredAppToken(),
@@ -88,11 +104,27 @@ const state = {
     requestId: null,
     requestTimer: null,
   },
+  launchTarget: {
+    agentId: launchParams.get("agentId") || null,
+    conversationId: launchParams.get("conversationId") || null,
+    agentName: launchParams.get("agentName") || null,
+    deviceName: launchParams.get("deviceName") || null,
+    applied: false,
+  },
 };
 
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const shellNode = document.querySelector(".shell");
+const managerSubtitle = document.querySelector("#manager-subtitle");
+const managerProvider = document.querySelector("#manager-provider");
+const managerSummary = document.querySelector("#manager-summary");
+const managerQuickActions = document.querySelector("#manager-quick-actions");
+const managerStage = document.querySelector("#manager-stage");
+const managerMessagesNode = document.querySelector("#manager-messages");
+const managerComposer = document.querySelector("#manager-composer");
+const managerInput = document.querySelector("#manager-input");
+const managerSendButton = document.querySelector("#manager-send-button");
 const agentCount = document.querySelector("#agent-count");
 const deviceList = document.querySelector("#device-list");
 const agentList = document.querySelector("#agent-list");
@@ -122,6 +154,12 @@ const STATUS_LABELS = {
   failed: "失败",
 };
 const DIRECTORY_REQUEST_TIMEOUT_MS = 4000;
+const MANAGER_QUICK_ACTIONS = [
+  "现在我的 agent 员工有哪些",
+  "他们现在在做什么",
+  "谁卡住了",
+  "看看最新任务进度",
+];
 
 function updateViewportHeight() {
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
@@ -253,6 +291,10 @@ function getAgent(agentId) {
 
 function getDevice(deviceId) {
   return state.devices.find((device) => device.id === deviceId) || null;
+}
+
+function getManagerStatusLabel(message) {
+  return STATUS_LABELS[message?.status] || message?.status || "";
 }
 
 function deriveDevicesFromAgents(agents) {
@@ -405,6 +447,9 @@ function selectDevice(deviceId) {
 
 function selectAgent(agentId) {
   state.pendingConversationId = null;
+  if (state.directFocus && state.directFocus.agentId !== agentId) {
+    state.directFocus = null;
+  }
   state.activeAgentId = agentId;
   state.activeDeviceId = getAgent(agentId)?.deviceId || state.activeDeviceId;
   const conversations = getConversationsForAgent(agentId);
@@ -667,6 +712,247 @@ function handleDirectoryList(payload) {
   renderDirectoryPicker();
 }
 
+function openDirectConversation(action) {
+  if (!action?.agentId) {
+    return;
+  }
+
+  state.directFocus = {
+    agentId: action.agentId,
+    conversationId: action.conversationId || null,
+    agentName: action.agentName || getAgent(action.agentId)?.name || action.agentId,
+    deviceName:
+      action.deviceName || getAgent(action.agentId)?.deviceName || getDevice(state.activeDeviceId)?.name,
+  };
+  selectAgent(action.agentId);
+  if (action.conversationId) {
+    state.activeConversationId = action.conversationId;
+  }
+  if (isMobileLayout()) {
+    setMobileView("chat", { skipPersist: true });
+  }
+  render();
+  requestAnimationFrame(() => {
+    document.querySelector(".conversation-panel")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  });
+}
+
+function openManagerAction(action) {
+  if (!action?.type) {
+    return;
+  }
+
+  if (action.type === "switch_direct") {
+    openDirectConversation(action);
+    return;
+  }
+
+  if (action.type === "open_task_detail" && action.taskId) {
+    const params = new URLSearchParams();
+    params.set("taskId", action.taskId);
+    if (action.conversationId) {
+      params.set("conversationId", action.conversationId);
+    }
+    if (action.agentId) {
+      params.set("agentId", action.agentId);
+    }
+    if (action.agentName) {
+      params.set("agentName", action.agentName);
+    }
+    if (action.deviceName) {
+      params.set("deviceName", action.deviceName);
+    }
+    window.location.href = `/task.html?${params.toString()}`;
+  }
+}
+
+function applyLaunchTarget() {
+  if (state.launchTarget.applied || !state.launchTarget.agentId) {
+    return;
+  }
+
+  const agent = getAgent(state.launchTarget.agentId);
+  if (!agent) {
+    return;
+  }
+
+  state.launchTarget.applied = true;
+  state.directFocus = {
+    agentId: state.launchTarget.agentId,
+    conversationId: state.launchTarget.conversationId || null,
+    agentName: state.launchTarget.agentName || agent.name,
+    deviceName: state.launchTarget.deviceName || agent.deviceName,
+  };
+  selectAgent(state.launchTarget.agentId);
+
+  if (state.launchTarget.conversationId) {
+    state.activeConversationId = state.launchTarget.conversationId;
+  }
+
+  if (isMobileLayout()) {
+    setMobileView("chat", { skipPersist: true });
+  }
+}
+
+function renderManagerPanel() {
+  if (
+    !managerProvider ||
+    !managerSubtitle ||
+    !managerSummary ||
+    !managerQuickActions ||
+    !managerMessagesNode ||
+    !managerSendButton ||
+    !managerComposer ||
+    !managerInput
+  ) {
+    return;
+  }
+
+  const summary = state.manager.summary || {};
+  const providerLabel =
+    state.manager.provider === "openai"
+      ? `大模型 ${state.manager.model || "OpenAI"}`
+      : "本地摘要";
+  managerProvider.textContent = providerLabel;
+  managerSubtitle.textContent =
+    state.manager.provider === "openai"
+      ? "告诉我你想推进什么任务，我会先理解、再调度员工，必要时帮你切到直连。"
+      : "当前还没配置经理层大模型，我先用本地摘要能力帮你盘点员工和任务。";
+
+  managerSummary.innerHTML = `
+    <div class="manager-stat-card">
+      <span class="manager-stat-label">在线员工</span>
+      <strong>${summary.onlineAgentCount || 0}/${summary.totalAgentCount || 0}</strong>
+    </div>
+    <div class="manager-stat-card">
+      <span class="manager-stat-label">执行中任务</span>
+      <strong>${summary.activeTaskCount || 0}</strong>
+    </div>
+    <div class="manager-stat-card">
+      <span class="manager-stat-label">阻塞任务</span>
+      <strong>${summary.blockedTaskCount || 0}</strong>
+    </div>
+  `;
+
+  managerQuickActions.innerHTML = MANAGER_QUICK_ACTIONS.map(
+    (text) => `
+      <button type="button" class="manager-quick-button" data-manager-prompt="${escapeHtml(text)}">
+        ${escapeHtml(text)}
+      </button>
+    `
+  ).join("");
+
+  managerQuickActions.querySelectorAll("[data-manager-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      managerInput.value = button.dataset.managerPrompt || "";
+      managerComposer.requestSubmit();
+    });
+  });
+
+  const messages = state.manager.messages || [];
+  if (messages.length === 0) {
+    managerMessagesNode.innerHTML = `
+      <div class="empty-card manager-empty-card">
+        先直接问我，例如“现在我的员工有哪些”“他们现在在做什么”“帮我切到和 Codex Main 的对话”。
+      </div>
+    `;
+  } else {
+    managerMessagesNode.innerHTML = messages
+      .map((message) => {
+        const roleClass = message.role === "assistant" ? "assistant" : "user";
+        const statusLabel = message.role === "user" ? getManagerStatusLabel(message) : "";
+        const statusMarkup = statusLabel
+          ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
+          : "";
+        const errorMarkup =
+          message.role === "user" && message.errorMessage
+            ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
+            : "";
+        const actionMarkup =
+          message.role === "assistant" && message.action?.type
+            ? `
+              <div class="manager-action-row">
+                <button
+                  type="button"
+                  class="manager-action-button"
+                  data-manager-action="${encodeURIComponent(JSON.stringify(message.action))}"
+                >
+                  ${escapeHtml(
+                    message.action.label ||
+                      (message.action.type === "open_task_detail"
+                        ? "查看任务详情"
+                        : `进入与 ${message.action.agentName || message.action.agentId} 的直连`)
+                  )}
+                </button>
+              </div>
+            `
+            : "";
+
+        return `
+          <article class="message ${roleClass}">
+            <div class="bubble">
+              <p>${escapeHtml(message.text).replaceAll("\n", "<br />")}</p>
+            </div>
+            <div class="meta">
+              <span>${formatTime(message.createdAt)}</span>
+              ${statusMarkup}
+            </div>
+            ${actionMarkup}
+            ${errorMarkup}
+          </article>
+        `;
+      })
+      .join("");
+
+    const latestPending = [...messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "user" &&
+          ["queued", "sent", "processing"].includes(message.status)
+      );
+
+    if (latestPending?.status === "processing") {
+      managerMessagesNode.innerHTML += `
+        <article class="message assistant transient">
+          <div class="bubble typing-bubble">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="meta">
+            <span>AI经理正在汇总</span>
+          </div>
+        </article>
+      `;
+    }
+  }
+
+  managerMessagesNode.querySelectorAll("[data-manager-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const raw = button.dataset.managerAction;
+      if (!raw) {
+        return;
+      }
+
+      try {
+        openManagerAction(JSON.parse(decodeURIComponent(raw)));
+      } catch (error) {
+        console.error(error);
+      }
+    });
+  });
+
+  managerSendButton.disabled = !state.connected;
+  requestAnimationFrame(() => {
+    managerMessagesNode.scrollTo({
+      top: managerMessagesNode.scrollHeight,
+      behavior: "smooth",
+    });
+  });
+}
+
 function renderDevices() {
   const devices = state.devices.length > 0 ? state.devices : deriveDevicesFromAgents(state.agents);
 
@@ -860,6 +1146,9 @@ function renderThreadStrip(agent) {
   threadStrip.querySelectorAll("[data-conversation-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.activeConversationId = button.dataset.conversationId;
+      if (state.directFocus && state.directFocus.agentId !== agent.id) {
+        state.directFocus = null;
+      }
       if (isMobileLayout()) {
         setMobileView("chat");
       }
@@ -1141,6 +1430,24 @@ function scrollMessagesToBottom(behavior = "smooth") {
   });
 }
 
+function buildConversationRenderSignature(conversationId, messages, hiddenMessageCount, showTyping) {
+  return [
+    conversationId || "none",
+    hiddenMessageCount,
+    showTyping ? "typing" : "idle",
+    ...messages.map((message) =>
+      [
+        message.id,
+        message.role,
+        message.status || "",
+        message.errorMessage || "",
+        message.createdAt,
+        message.text || "",
+      ].join(":")
+    ),
+  ].join("|");
+}
+
 function renderMessages() {
   const agent = getAgent(state.activeAgentId);
   const conversation = getActiveConversation();
@@ -1150,8 +1457,8 @@ function renderMessages() {
   const shouldAutoStick = conversationChanged || state.messageViewport.stickToBottom;
 
   if (!state.activeAgentId || !agent) {
-    conversationTitle.textContent = "等待 Agent";
-    conversationSubtitle.textContent = "先连接设备，再选择这台设备上的数字员工。";
+    conversationTitle.textContent = "等待直连员工";
+    conversationSubtitle.textContent = "AI经理 会在需要时把你切到这里，直接和某位数字员工对话。";
     renderThreadStrip(null);
     renderMessageToolbar(null, null);
     messagesNode.innerHTML =
@@ -1173,7 +1480,11 @@ function renderMessages() {
   } else if (!agent.online) {
     conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递`;
   } else {
-    conversationSubtitle.textContent = `已连接 · 设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+    const directPrefix =
+      state.directFocus?.agentId === agent.id
+        ? `当前直连 ${state.directFocus.agentName || agent.name} · `
+        : "";
+    conversationSubtitle.textContent = `${directPrefix}设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
   }
 
   renderThreadStrip(agent);
@@ -1181,6 +1492,12 @@ function renderMessages() {
   sendButton.disabled = !state.connected;
 
   if (!conversation || conversation.messages.length === 0) {
+    state.messageViewport.lastRenderSignature = buildConversationRenderSignature(
+      conversationId,
+      [],
+      0,
+      false
+    );
     messagesNode.innerHTML =
       '<div class="empty-card">还没有消息。发第一条消息试试看。</div>';
     state.messageViewport.lastConversationId = conversationId;
@@ -1190,8 +1507,32 @@ function renderMessages() {
     return;
   }
 
-  messagesNode.innerHTML = conversation.messages
-    .map((message) => {
+  const hiddenMessageCount = conversation.hiddenMessageCount || 0;
+  const lastMessage = conversation.messages[conversation.messages.length - 1] || null;
+  const shouldShowTyping =
+    lastMessage?.role === "user" &&
+    ["queued", "sent", "processing"].includes(lastMessage.status);
+  const renderSignature = buildConversationRenderSignature(
+    conversationId,
+    conversation.messages,
+    hiddenMessageCount,
+    shouldShowTyping
+  );
+
+  if (renderSignature !== state.messageViewport.lastRenderSignature) {
+    const historyNotice =
+      hiddenMessageCount > 0
+        ? `
+          <div class="message-history-note">
+            为保持页面流畅，这里只显示最近 ${conversation.messages.length} 条直连消息，已折叠更早的 ${hiddenMessageCount} 条。
+          </div>
+        `
+        : "";
+
+    messagesNode.innerHTML =
+      historyNotice +
+      conversation.messages
+      .map((message) => {
       const roleClass = message.role === "assistant" ? "assistant" : "user";
       const statusLabel = STATUS_LABELS[message.status] || message.status || "";
       const status =
@@ -1217,25 +1558,20 @@ function renderMessages() {
     })
     .join("");
 
-  const latestPending = [...conversation.messages]
-    .reverse()
-    .find(
-      (message) =>
-        message.role === "user" &&
-        ["queued", "sent", "processing"].includes(message.status)
-    );
+    if (shouldShowTyping) {
+      messagesNode.innerHTML += `
+        <article class="message assistant transient">
+          <div class="bubble typing-bubble">
+            <span></span><span></span><span></span>
+          </div>
+          <div class="meta">
+            <span>数字员工正在处理</span>
+          </div>
+        </article>
+      `;
+    }
 
-  if (latestPending?.status === "processing") {
-    messagesNode.innerHTML += `
-      <article class="message assistant transient">
-        <div class="bubble typing-bubble">
-          <span></span><span></span><span></span>
-        </div>
-        <div class="meta">
-          <span>数字员工正在处理</span>
-        </div>
-      </article>
-    `;
+    state.messageViewport.lastRenderSignature = renderSignature;
   }
 
   requestAnimationFrame(() => {
@@ -1397,8 +1733,10 @@ function renderConnection() {
 
 function render() {
   ensureActiveSelection();
+  applyLaunchTarget();
   ensureMobileView();
   renderConnection();
+  renderManagerPanel();
   renderMobileNav();
   renderAgents();
   renderMessages();
@@ -1462,7 +1800,9 @@ function connect() {
       state.auth.error = "";
       state.devices = payload.data.devices || deriveDevicesFromAgents(payload.data.agents || []);
       state.agents = payload.data.agents || [];
+      state.tasks = payload.data.tasks || [];
       state.conversations = payload.data.conversations || [];
+      state.manager = payload.data.manager || state.manager;
       render();
       return;
     }
@@ -1493,6 +1833,14 @@ function connect() {
       return;
     }
 
+    if (
+      (payload.type === "manager_action_requested" || payload.type === "manager_direct_opened") &&
+      payload.action
+    ) {
+      openManagerAction(payload.action);
+      return;
+    }
+
     if (payload.type === "error" && payload.message) {
       console.error(payload.message);
     }
@@ -1518,12 +1866,40 @@ composer.addEventListener("submit", (event) => {
   messageInput.focus();
 });
 
+if (managerComposer && managerInput) {
+  managerComposer.addEventListener("submit", (event) => {
+    event.preventDefault();
+
+    const text = managerInput.value.trim();
+    if (!text || !state.socket || state.socket.readyState !== 1) {
+      return;
+    }
+
+    sendAction({
+      type: "manager_message",
+      text,
+    });
+
+    managerInput.value = "";
+    managerInput.focus();
+  });
+}
+
 messageInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     composer.requestSubmit();
   }
 });
+
+if (managerInput && managerComposer) {
+  managerInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      managerComposer.requestSubmit();
+    }
+  });
+}
 
 directoryPickerModal.addEventListener("click", (event) => {
   if (event.target === directoryPickerModal) {

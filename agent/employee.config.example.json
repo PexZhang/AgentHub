@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "agenthub.employee-config.v1",
+  "hubOrigin": "http://localhost:3000",
+  "agentToken": "replace-with-agent-token",
+  "deviceId": "macbook-zhangpeng",
+  "deviceName": "Zhangpeng MacBook",
+  "agentId": "codex-main",
+  "agentName": "Codex Main",
+  "agentMode": "codex",
+  "agentVersion": "1.0.0",
+  "heartbeatIntervalMs": 15000,
+  "defaultWorkspaceKind": "repo",
+  "workdirRoots": [
+    "/Users/zhangpeng/Codes",
+    "/Users/zhangpeng/Documents"
+  ],
+  "codex": {
+    "bin": "codex",
+    "workdir": "/Users/zhangpeng/Codes/AgentHub",
+    "model": "",
+    "sandbox": "read-only",
+    "home": "/Users/zhangpeng/.codex"
+  },
+  "workspaces": [
+    {
+      "id": "workspace-macbook-zhangpeng-agenthub",
+      "name": "AgentHub 仓库",
+      "path": "/Users/zhangpeng/Codes/AgentHub",
+      "kind": "repo",
+      "description": "主要代码工作区。",
+      "tags": [
+        "product",
+        "code"
+      ],
+      "runtimeHints": [
+        "codex"
+      ]
+    },
+    {
+      "id": "workspace-macbook-zhangpeng-contracts",
+      "name": "合同文档目录",
+      "path": "/Users/zhangpeng/Documents/contracts",
+      "kind": "docs",
+      "description": "文档整理与分析类任务的工作区。",
+      "tags": [
+        "docs"
+      ],
+      "runtimeHints": [
+        "codex"
+      ]
+    }
+  ]
+}

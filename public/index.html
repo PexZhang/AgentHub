@@ -14,71 +14,48 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">AgentHub</p>
-          <h1>数字员工协作台</h1>
+          <h1>AI 经理工作台</h1>
+          <p class="muted">
+            直接把目标交给我。你不用先选设备、员工或目录，只有要看细节时我再带你下钻。
+          </p>
         </div>
-        <div class="status-dot-row">
-          <span class="status-dot" id="socket-dot"></span>
-          <span id="socket-text">正在连接</span>
+        <div class="topbar-actions">
+          <a class="topbar-text-link" href="/commander.html">需要全局视图时，再看指挥总览</a>
+          <div class="status-dot-row">
+            <span class="status-dot" id="socket-dot"></span>
+            <span id="socket-text">正在连接</span>
+          </div>
         </div>
       </header>
 
-      <section class="panel agents-panel">
+      <section class="panel manager-panel">
         <div class="panel-title-row">
           <div>
-            <h2>设备与数字员工</h2>
-            <p class="muted">先选设备，再切换这台设备上的数字员工。</p>
-          </div>
-          <span class="muted" id="agent-count">0 online</span>
-        </div>
-        <div id="device-list" class="device-list"></div>
-        <div id="agent-list" class="agent-list"></div>
-      </section>
-
-      <section class="panel conversation-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2 id="conversation-title">等待 Agent</h2>
-            <p class="muted" id="conversation-subtitle">
-              选择本机数字员工后，这里会显示它自己的会话和消息
+            <h2>告诉我你现在想推进什么</h2>
+            <p class="muted" id="manager-subtitle">
+              直接问我任务、员工状态或进度。只有你要深入看某位员工时，我才给你跳转卡片。
             </p>
           </div>
         </div>
-
-        <div id="thread-strip" class="thread-strip"></div>
-
-        <div id="message-stage" class="message-stage">
-          <div id="message-toolbar" class="message-toolbar"></div>
-          <div id="messages" class="messages"></div>
-          <button type="button" id="message-jump-button" class="message-jump-button" hidden>
-            回到底部
-          </button>
+        <div id="manager-status-strip" class="manager-status-strip"></div>
+        <div id="manager-stage" class="message-stage manager-stage">
+          <div id="manager-messages" class="messages manager-messages"></div>
         </div>
-
-        <form id="composer" class="composer">
+        <form id="manager-composer" class="composer manager-composer">
           <textarea
-            id="message-input"
+            id="manager-input"
             rows="1"
-            placeholder="输入消息，发给当前选中的数字员工"
+            placeholder="比如：现在我的员工有哪些 / 他们现在在做什么 / 帮我看看 Codex Agent 的进度"
           ></textarea>
-          <button type="submit" id="send-button">发送</button>
+          <button type="submit" id="manager-send-button">发送给经理</button>
         </form>
       </section>
-
-      <nav id="mobile-nav" class="mobile-nav" hidden></nav>
-    </div>
-
-    <div id="directory-picker-modal" class="directory-modal" hidden>
-      <div id="directory-picker-content" class="directory-modal-content"></div>
-    </div>
-
-    <div id="session-picker-modal" class="session-modal" hidden>
-      <div id="session-picker-content" class="session-modal-content"></div>
     </div>
 
     <div id="auth-modal" class="session-modal" hidden>
       <div id="auth-modal-content" class="session-modal-content"></div>
     </div>
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/manager.js"></script>
   </body>
 </html>

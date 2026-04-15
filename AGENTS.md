@@ -8,6 +8,7 @@ Read these files first:
 
 - [README.md](/Users/zhangpeng/ai-chat-mvp/README.md)
 - [ARCHITECTURE.md](/Users/zhangpeng/ai-chat-mvp/ARCHITECTURE.md)
+- [AGENT_FIRST.md](/Users/zhangpeng/ai-chat-mvp/AGENT_FIRST.md)
 
 ## Working Rules
 
@@ -24,6 +25,12 @@ Use the canonical terms from `ARCHITECTURE.md`:
 - Session
 
 Do not invent overlapping names like `bot`, `worker`, `assistant`, and `agent` interchangeably in the same feature unless there is a real domain difference.
+
+Also preserve the product priority from `AGENT_FIRST.md`:
+
+- Agent is the primary user of the execution layer
+- AI Manager is a thin orchestration layer for humans
+- Human UI should stay simpler than the underlying system
 
 ### 2. Respect Boundaries
 
@@ -55,6 +62,15 @@ Whenever practical:
 - keep state files easy to inspect
 - keep errors explicit and user-readable
 
+If you touch employee bootstrap, onboarding, or runtime registration, prefer verifying with:
+
+- `npm run smoke:onboard`
+- `npm run smoke`
+
+If you touch manager routing, task delegation, or approval handling, prefer verifying with:
+
+- `npm run smoke:manager:stack`
+
 ## Good Change Pattern
 
 For most non-trivial features, use this order:
@@ -80,3 +96,4 @@ A change is in good shape when:
 - the contracts are visible in code and docs
 - the user-facing naming matches the product vocabulary
 - the behavior can be reproduced locally without tribal knowledge
+- the change improves or at least preserves agent execution ergonomics

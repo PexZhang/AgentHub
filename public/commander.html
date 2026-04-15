@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <title>AgentHub · 指挥总览</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell commander-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AgentHub</p>
+          <h1>指挥总览</h1>
+          <p class="muted" id="commander-subtitle">
+            这里只展示你真正需要盯的内容：谁在做什么、在哪台设备、哪个工作区、是否需要你介入。
+          </p>
+        </div>
+        <div class="topbar-actions">
+          <a class="nav-pill secondary" href="/">返回 AI经理</a>
+          <div class="status-dot-row">
+            <span class="status-dot" id="socket-dot"></span>
+            <span id="socket-text">正在连接</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="panel commander-summary-panel">
+        <div class="panel-title-row">
+          <div>
+            <h2>当前态势</h2>
+            <p class="muted" id="commander-sync-note">
+              你换设备打开这个页面时，会读到同一份 AgentHub 状态快照。
+            </p>
+          </div>
+          <span class="muted" id="commander-generated-at">等待同步</span>
+        </div>
+        <div id="commander-summary" class="manager-summary commander-summary"></div>
+      </section>
+
+      <section class="panel commander-attention-panel">
+        <div class="panel-title-row">
+          <div>
+            <h2>需要你关注</h2>
+            <p class="muted">
+              我把阻塞、待审批、长时间无更新、员工离线但任务未结束这些情况提前提给你。
+            </p>
+          </div>
+        </div>
+        <div id="commander-attention" class="commander-attention-list"></div>
+      </section>
+
+      <section class="panel commander-employees-panel">
+        <div class="panel-title-row">
+          <div>
+            <h2>员工态势</h2>
+            <p class="muted">
+              每个员工卡片只展示你最常看的信息，并给出纠偏入口。
+            </p>
+          </div>
+          <span class="muted" id="commander-employee-count">0 位员工</span>
+        </div>
+        <div id="commander-employees" class="commander-employee-list"></div>
+      </section>
+    </div>
+
+    <div id="auth-modal" class="session-modal" hidden>
+      <div id="auth-modal-content" class="session-modal-content"></div>
+    </div>
+
+    <script type="module" src="/commander.js"></script>
+  </body>
+</html>

@@ -1,37 +1,58 @@
 import "dotenv/config";
 import WebSocket from "ws";
-import { spawn } from "child_process";
 import { promises as fs } from "fs";
-import { join, resolve, sep } from "path";
-import os from "os";
+import { basename, join, resolve, sep } from "path";
+import {
+  isPathWithinRoots,
+  loadAgentRuntimeConfig,
+  loadConfiguredWorkspaceCatalog,
+  resolvePathLike,
+} from "./config.js";
+import { createRuntimeAdapter } from "./providers/index.js";
 
 function normalizeText(value) {
   return String(value || "").trim();
 }
 
-const HUB_ORIGIN = process.env.HUB_ORIGIN || "http://localhost:3000";
+function normalizeWorkspaceKind(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return normalized || "repo";
+}
+
+const runtimeConfig = await loadAgentRuntimeConfig();
+
+const HUB_ORIGIN = runtimeConfig.hubOrigin || "http://localhost:3000";
 const HUB_WS_URL = HUB_ORIGIN.replace(/^http/, "ws") + "/ws";
-const AGENT_ID = process.env.AGENT_ID || "local-ai";
-const AGENT_NAME = process.env.AGENT_NAME || "Digital Employee";
-const AGENT_MODE = process.env.AGENT_MODE || "echo";
-const AGENT_TOKEN = process.env.AGENT_TOKEN || "";
-const DEVICE_ID = normalizeText(process.env.DEVICE_ID) || os.hostname();
-const DEVICE_NAME = normalizeText(process.env.DEVICE_NAME) || DEVICE_ID;
+const AGENT_ID = runtimeConfig.agentId || "local-ai";
+const AGENT_NAME = runtimeConfig.agentName || "Digital Employee";
+const AGENT_MODE = runtimeConfig.agentMode || "echo";
+const AGENT_TOKEN = runtimeConfig.agentToken || "";
+const DEVICE_ID = normalizeText(runtimeConfig.deviceId);
+const DEVICE_NAME = normalizeText(runtimeConfig.deviceName) || DEVICE_ID;
+const AGENT_DEFAULT_WORKSPACE_KIND =
+  normalizeWorkspaceKind(runtimeConfig.defaultWorkspaceKind) || "repo";
+const AGENT_HEARTBEAT_INTERVAL_MS = Math.max(
+  5000,
+  Number(runtimeConfig.heartbeatIntervalMs || 15000)
+);
+const AGENT_VERSION = normalizeText(runtimeConfig.agentVersion) || "1.0.0";
 const AGENT_PROMPT =
-  process.env.AGENT_PROMPT ||
+  runtimeConfig.agentPrompt ||
   "你是 AgentHub 里的一个数字员工，要用简洁、可靠、可执行的方式帮助用户推进任务。";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
-const CODEX_BIN = process.env.CODEX_BIN || "codex";
-const CODEX_WORKDIR = process.env.CODEX_WORKDIR || process.cwd();
-const CODEX_MODEL = process.env.CODEX_MODEL || "";
-const CODEX_SANDBOX = process.env.CODEX_SANDBOX || "read-only";
-const CODEX_HOME = process.env.CODEX_HOME || join(os.homedir(), ".codex");
+const OPENAI_API_KEY = runtimeConfig.openaiApiKey || "";
+const OPENAI_MODEL = runtimeConfig.openaiModel || "gpt-5";
+const CODEX_BIN = runtimeConfig.codexBin || "codex";
+const CODEX_WORKDIR = runtimeConfig.codexWorkdir || process.cwd();
+const CODEX_MODEL = runtimeConfig.codexModel || "";
+const CODEX_SANDBOX = runtimeConfig.codexSandbox || "read-only";
+const CODEX_HOME = runtimeConfig.codexHome;
 const CODEX_SESSION_INDEX = join(CODEX_HOME, "session_index.jsonl");
 const MAX_RECENT_CODEX_SESSIONS = 12;
-const AGENT_WORKDIR_ROOTS = (process.env.AGENT_WORKDIR_ROOTS || CODEX_WORKDIR)
-  .split(",")
-  .map((value) => value.trim())
+const AGENT_WORKDIR_ROOTS = (Array.isArray(runtimeConfig.workdirRoots)
+  ? runtimeConfig.workdirRoots
+  : [CODEX_WORKDIR]
+)
+  .map((value) => resolvePathLike(value))
   .filter(Boolean)
   .map((value) => resolve(value))
   .filter((value, index, all) => all.indexOf(value) === index);
@@ -39,6 +60,13 @@ const DEFAULT_CODEX_WORKDIR = resolve(CODEX_WORKDIR);
 
 const processedMessages = new Set();
 let authFailed = false;
+let heartbeatTimer = null;
+const runtimeState = {
+  status: "idle",
+  currentTaskId: null,
+  currentRunId: null,
+  summary: null,
+};
 const availableRuntimes = [
   "echo",
   ...(OPENAI_API_KEY ? ["openai"] : []),
@@ -54,15 +82,129 @@ function normalizeWorkdir(value) {
   return resolve(String(value || DEFAULT_CODEX_WORKDIR));
 }
 
+function buildWorkspaceId(pathValue) {
+  const seed = `${DEVICE_ID}-${pathValue}`;
+  const slug = normalizeText(seed)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `workspace-${slug || "default"}`;
+}
+
+function buildWorkspaceName(pathValue) {
+  return basename(pathValue) || pathValue || "Workspace";
+}
+
 function isWithinAllowedRoot(targetPath) {
-  return AGENT_WORKDIR_ROOTS.some(
-    (root) => targetPath === root || targetPath.startsWith(`${root}${sep}`)
-  );
+  return isPathWithinRoots(targetPath, AGENT_WORKDIR_ROOTS);
 }
 
 function getConversationWorkdir(conversation) {
   const candidate = normalizeWorkdir(conversation?.codexWorkdir || DEFAULT_CODEX_WORKDIR);
   return isWithinAllowedRoot(candidate) ? candidate : DEFAULT_CODEX_WORKDIR;
+}
+
+function buildProgressEvent(payload, overrides = {}) {
+  const taskId = normalizeText(payload?.task?.id || payload?.taskId);
+  const sourceMessageId = normalizeText(
+    payload?.task?.sourceMessageId || payload?.sourceMessageId || payload?.replyTo
+  );
+  const runId =
+    normalizeText(overrides.runId || payload?.task?.runId) ||
+    (taskId ? `run-${taskId}` : null);
+  return {
+    type: "task_progress",
+    taskId: taskId || null,
+    runId,
+    conversationId: normalizeText(payload?.conversationId) || null,
+    replyTo: sourceMessageId || null,
+    agentId: AGENT_ID,
+    employeeId: AGENT_ID,
+    runStatus: overrides.runStatus || null,
+    status: overrides.status || null,
+    summary: normalizeText(overrides.summary) || null,
+    error: normalizeText(overrides.error) || null,
+    outputRef: normalizeText(overrides.outputRef) || null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeWorkspaceRecord(workspace, index = 0) {
+  const pathValue = normalizeText(workspace?.path || workspace?.workdir);
+  if (!pathValue) {
+    return null;
+  }
+
+  const resolvedPath = normalizeWorkdir(pathValue);
+  if (!isWithinAllowedRoot(resolvedPath)) {
+    return null;
+  }
+
+  const tags = Array.isArray(workspace?.tags)
+    ? workspace.tags.map((tag) => normalizeText(tag)).filter(Boolean)
+    : [];
+  const runtimeHints = Array.isArray(workspace?.runtimeHints)
+    ? workspace.runtimeHints.map((hint) => normalizeText(hint)).filter(Boolean)
+    : [];
+  const effectiveRuntimeHints =
+    runtimeHints.length > 0 ? runtimeHints : currentMode ? [currentMode] : [];
+
+  return {
+    id: normalizeText(workspace?.id) || buildWorkspaceId(resolvedPath),
+    name: normalizeText(workspace?.name) || buildWorkspaceName(resolvedPath),
+    path: resolvedPath,
+    kind: normalizeWorkspaceKind(workspace?.kind || AGENT_DEFAULT_WORKSPACE_KIND),
+    description: normalizeText(workspace?.description) || null,
+    tags: [...new Set(tags)],
+    runtimeHints: [...new Set(effectiveRuntimeHints)],
+    defaultEmployeeId: AGENT_ID,
+    ordinal: index,
+  };
+}
+
+function buildDefaultWorkspaceCatalog() {
+  return [
+    normalizeWorkspaceRecord(
+      {
+        id: buildWorkspaceId(DEFAULT_CODEX_WORKDIR),
+        name: buildWorkspaceName(DEFAULT_CODEX_WORKDIR),
+        path: DEFAULT_CODEX_WORKDIR,
+        kind: AGENT_DEFAULT_WORKSPACE_KIND,
+        description: "当前数字员工的默认工作目录。",
+      },
+      0
+    ),
+  ].filter(Boolean);
+}
+
+async function loadDeclaredWorkspaces() {
+  try {
+    const { items: sourceItems, sourceLabel } = await loadConfiguredWorkspaceCatalog(runtimeConfig);
+    const skippedPaths = [];
+    const workspaces = sourceItems
+      .map((workspace, index) => {
+        const record = normalizeWorkspaceRecord(workspace, index);
+        if (!record && normalizeText(workspace?.path || workspace?.workdir)) {
+          skippedPaths.push(resolvePathLike(workspace?.path || workspace?.workdir));
+        }
+        return record;
+      })
+      .filter(Boolean);
+
+    if (skippedPaths.length > 0) {
+      console.warn(
+        `Skipped ${skippedPaths.length} workspace(s) outside allowed roots from ${sourceLabel}: ${skippedPaths.join(", ")}`
+      );
+    }
+
+    if (workspaces.length > 0) {
+      return workspaces;
+    }
+  } catch (error) {
+    console.warn("Failed to load agent workspaces:", error.message);
+  }
+
+  return buildDefaultWorkspaceCatalog();
 }
 
 async function listDirectories(pathValue) {
@@ -148,6 +290,30 @@ async function loadRecentCodexSessions() {
   }
 }
 
+const runtimeAdapter = createRuntimeAdapter({
+  mode: currentMode,
+  agentName: AGENT_NAME,
+  systemPrompt: AGENT_PROMPT,
+  openaiApiKey: OPENAI_API_KEY,
+  openaiModel: OPENAI_MODEL,
+  codexBin: CODEX_BIN,
+  codexModel: CODEX_MODEL,
+  codexSandbox: CODEX_SANDBOX,
+  defaultWorkdir: DEFAULT_CODEX_WORKDIR,
+  getConversationWorkdir,
+  loadRecentCodexSessions,
+  sleep,
+  env: process.env,
+});
+
+const agentCapabilities = [
+  "direct_chat",
+  "report_progress",
+  "declare_workspaces",
+  ...(AGENT_WORKDIR_ROOTS.length > 0 ? ["browse_directories"] : []),
+  ...((runtimeAdapter?.capabilities || []).filter(Boolean)),
+].filter((value, index, all) => all.indexOf(value) === index);
+
 function sendJson(ws, payload) {
   if (ws.readyState !== 1) {
     return;
@@ -155,232 +321,36 @@ function sendJson(ws, payload) {
   ws.send(JSON.stringify(payload));
 }
 
-function toOpenAIInput(conversation) {
-  const items = [];
-
-  if (AGENT_PROMPT) {
-    items.push({ role: "system", content: AGENT_PROMPT });
-  }
-
-  for (const message of conversation.messages || []) {
-    if (message.role === "assistant") {
-      items.push({ role: "assistant", content: message.text });
-      continue;
-    }
-
-    if (message.role === "user") {
-      items.push({ role: "user", content: message.text });
-    }
-  }
-
-  return items;
+function updateRuntimeState(patch = {}) {
+  Object.assign(runtimeState, patch);
 }
 
-async function askOpenAI(conversation) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      input: toOpenAIInput(conversation),
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI 请求失败: ${response.status} ${errorText}`);
-  }
-
-  const json = await response.json();
-  return json.output_text || "我收到了消息，但没有生成文本回复。";
-}
-
-function buildCodexNewSessionPrompt(conversation, message) {
-  const transcript = (conversation.messages || [])
-    .map((item) => {
-      const speaker = item.role === "assistant" ? "assistant" : "user";
-      return `[${speaker}] ${item.text}`;
-    })
-    .join("\n\n");
-
-  return [
-    AGENT_PROMPT,
-    "你现在作为一个手机聊天里的本地 Codex 助手回复用户。",
-    "请基于下面的对话历史，用中文直接回复用户。",
-    "只输出最终要发送给用户的正文，不要加解释，不要加前缀。",
-    "",
-    "当前用户最新消息：",
-    message.text,
-    "",
-    "对话历史：",
-    transcript,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function buildCodexResumePrompt(message) {
-  return [
-    "继续处理这个手机聊天线程里的新消息。",
-    "请用中文直接回复用户，不要加前缀，不要解释你正在使用 Codex。",
-    "",
-    message.text,
-  ].join("\n");
-}
-
-async function runCodex(args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(CODEX_BIN, args, {
-      cwd: options.cwd || DEFAULT_CODEX_WORKDIR,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => {
-      reject(new Error(`无法启动 Codex CLI: ${error.message}`));
-    });
-
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(
-            `Codex CLI 执行失败 (退出码: ${code})${stderr ? `\n${stderr}` : ""}`
-          )
-        );
-        return;
-      }
-
-      const lines = stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      let lastAgentMessage = "";
-      let threadId = "";
-
-      for (const line of lines) {
-        try {
-          const event = JSON.parse(line);
-
-          if (event?.type === "thread.started" && event.thread_id) {
-            threadId = event.thread_id;
-          }
-
-          if (event?.type === "item.completed" && event.item?.type === "agent_message") {
-            lastAgentMessage = event.item.text || lastAgentMessage;
-          }
-        } catch {
-          // Ignore non-JSON lines. Codex may emit banner or warning lines on stdout.
-        }
-      }
-
-      if (!lastAgentMessage) {
-        reject(
-          new Error(
-            `Codex CLI 没有返回可解析的 agent_message。${stderr ? `\n${stderr}` : ""}`
-          )
-        );
-        return;
-      }
-
-      resolve({
-        text: lastAgentMessage.trim(),
-        threadId: threadId || null,
-      });
-    });
+function sendHeartbeat(ws) {
+  sendJson(ws, {
+    type: "agent_heartbeat",
+    agentId: AGENT_ID,
+    employeeId: AGENT_ID,
+    status: runtimeState.status,
+    currentTaskId: runtimeState.currentTaskId,
+    currentRunId: runtimeState.currentRunId,
+    summary: runtimeState.summary,
+    updatedAt: new Date().toISOString(),
   });
 }
 
-async function askCodex(conversation, message) {
-  const codexSessionId = String(conversation?.codexSessionId || "").trim();
-  const codexWorkdir = getConversationWorkdir(conversation);
-  let result;
-
-  if (codexSessionId) {
-    const args = [
-      "exec",
-      "resume",
-      "--skip-git-repo-check",
-      "--json",
-      "-c",
-      "features.apps=false",
-    ];
-
-    if (CODEX_MODEL) {
-      args.push("-m", CODEX_MODEL);
-    }
-
-    args.push(codexSessionId, buildCodexResumePrompt(message));
-    result = await runCodex(args, { cwd: codexWorkdir });
-  } else {
-    const args = [
-      "exec",
-      "--skip-git-repo-check",
-      "--json",
-      "--color",
-      "never",
-      "-c",
-      "features.apps=false",
-      "-s",
-      CODEX_SANDBOX,
-    ];
-
-    if (CODEX_MODEL) {
-      args.push("-m", CODEX_MODEL);
-    }
-
-    args.push("-C", codexWorkdir);
-    args.push(buildCodexNewSessionPrompt(conversation, message));
-    result = await runCodex(args, { cwd: codexWorkdir });
-  }
-
-  await sleep(200);
-  const recentCodexSessions = await loadRecentCodexSessions();
-  const sessionId = codexSessionId || result.threadId || recentCodexSessions[0]?.id || null;
-  const session = recentCodexSessions.find((item) => item.id === sessionId) || null;
-
-  return {
-    text: result.text,
-    codexWorkdir,
-    codexSessionId: sessionId,
-    codexThreadName: session?.threadName || conversation?.codexThreadName || null,
-    codexSessionUpdatedAt: session?.updatedAt || null,
-    recentCodexSessions,
-  };
+function startHeartbeat(ws) {
+  stopHeartbeat();
+  sendHeartbeat(ws);
+  heartbeatTimer = setInterval(() => {
+    sendHeartbeat(ws);
+  }, AGENT_HEARTBEAT_INTERVAL_MS);
 }
 
-async function buildReply(conversation, message) {
-  if (currentMode === "openai" && OPENAI_API_KEY) {
-    return { text: await askOpenAI(conversation) };
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
-
-  if (currentMode === "codex") {
-    return askCodex(conversation, message);
-  }
-
-  await sleep(300);
-  return {
-    text: [
-      `已收到你的消息：${message.text}`,
-      "",
-      `这是 ${AGENT_NAME} 在 AgentHub 里的最小版自动回复。`,
-      "如果你配置了 OPENAI_API_KEY，并把 AGENT_MODE 改成 openai，它就会改为真实模型回复。",
-    ].join("\n"),
-  };
 }
 
 function connect() {
@@ -392,20 +362,36 @@ function connect() {
   ws.on("open", async () => {
     authFailed = false;
     console.log(`Connected to hub: ${HUB_WS_URL}`);
-    const recentCodexSessions = await loadRecentCodexSessions();
+    updateRuntimeState({
+      status: "idle",
+      currentTaskId: null,
+      currentRunId: null,
+      summary: "已连上 AgentHub，等待任务。",
+    });
+    const [runtimeRegistrationContext, workspaces] = await Promise.all([
+      runtimeAdapter.getRegistrationContext?.() || {},
+      loadDeclaredWorkspaces(),
+    ]);
     sendJson(ws, {
-      type: "hello",
-      role: "agent",
+      type: "employee.register",
       agentId: AGENT_ID,
+      employeeId: AGENT_ID,
       name: AGENT_NAME,
+      employeeName: AGENT_NAME,
+      role: "agent",
       deviceId: DEVICE_ID,
       deviceName: DEVICE_NAME,
       mode: currentMode,
+      runtime: currentMode,
+      version: AGENT_VERSION,
+      capabilities: agentCapabilities,
       token: AGENT_TOKEN,
-      recentCodexSessions,
-      defaultCodexWorkdir: DEFAULT_CODEX_WORKDIR,
       workdirRoots: AGENT_WORKDIR_ROOTS,
+      workspaceHints: workspaces.map((workspace) => workspace.id),
+      workspaces,
+      ...runtimeRegistrationContext,
     });
+    startHeartbeat(ws);
   });
 
   ws.on("message", async (raw) => {
@@ -451,16 +437,39 @@ function connect() {
         return;
       }
 
-      if (payload.type !== "deliver_user_message") {
+      if (payload.type === "approval_resolved") {
+        const decision = normalizeText(payload.decision) || "approved";
+        updateRuntimeState({
+          status: decision === "approved" ? "busy" : "blocked",
+          currentTaskId: normalizeText(payload.taskId) || runtimeState.currentTaskId,
+          currentRunId: normalizeText(payload.runId) || runtimeState.currentRunId,
+          summary:
+            decision === "approved"
+              ? `审批已通过，可以继续执行。${normalizeText(payload.note) || ""}`.trim()
+              : `审批被拒绝：${normalizeText(payload.note) || "请等待进一步指示"}`,
+        });
         return;
       }
 
+      if (!["deliver_user_message", "task.assigned"].includes(payload.type)) {
+        return;
+      }
+
+      const taskPayload = payload.task || null;
       const messageId = payload.message?.id;
       if (!messageId || processedMessages.has(messageId)) {
         return;
       }
 
       processedMessages.add(messageId);
+      const taskId = normalizeText(taskPayload?.id) || null;
+      const runId = taskId ? `run-${taskId}` : null;
+      updateRuntimeState({
+        status: "busy",
+        currentTaskId: taskId,
+        currentRunId: runId,
+        summary: normalizeText(taskPayload?.title || payload.message?.text) || "正在处理任务",
+      });
 
       sendJson(ws, {
         type: "agent_status",
@@ -468,8 +477,29 @@ function connect() {
         replyTo: messageId,
         status: "processing",
       });
+      sendJson(
+        ws,
+        buildProgressEvent(
+          {
+            conversationId: payload.conversationId,
+            replyTo: messageId,
+            task: taskPayload,
+          },
+          {
+            status: "in_progress",
+            runId,
+            runStatus: "running",
+            summary: `${AGENT_NAME} 已开始处理：${
+              normalizeText(taskPayload?.title) || payload.message?.text || "新任务"
+            }`,
+          }
+        )
+      );
 
-      const reply = await buildReply(payload.conversation, payload.message);
+      const reply = await runtimeAdapter.reply({
+        conversation: payload.conversation,
+        message: payload.message,
+      });
 
       if (reply.recentCodexSessions) {
         sendJson(ws, {
@@ -483,6 +513,7 @@ function connect() {
         type: "agent_message",
         conversationId: payload.conversationId,
         agentId: AGENT_ID,
+        taskId: taskPayload?.id || null,
         replyTo: messageId,
         text: reply.text,
         codexWorkdir: reply.codexWorkdir || null,
@@ -490,10 +521,34 @@ function connect() {
         codexThreadName: reply.codexThreadName || null,
         codexSessionUpdatedAt: reply.codexSessionUpdatedAt || null,
       });
+      sendJson(
+        ws,
+        buildProgressEvent(
+          {
+            conversationId: payload.conversationId,
+            replyTo: messageId,
+            task: taskPayload,
+          },
+          {
+            status: "completed",
+            runId,
+            runStatus: "completed",
+            summary: reply.text,
+          }
+        )
+      );
+      updateRuntimeState({
+        status: "idle",
+        currentTaskId: null,
+        currentRunId: null,
+        summary: `刚完成：${normalizeText(taskPayload?.title || payload.message?.text) || "任务"}`,
+      });
     } catch (error) {
       console.error("Agent failed to process message:", error);
 
       if (payload?.conversationId && payload?.message?.id) {
+        const taskId = normalizeText(payload?.task?.id) || null;
+        const runId = taskId ? `run-${taskId}` : null;
         sendJson(ws, {
           type: "agent_status",
           conversationId: payload.conversationId,
@@ -501,11 +556,35 @@ function connect() {
           status: "failed",
           error: error.message || "处理失败",
         });
+        sendJson(
+          ws,
+          buildProgressEvent(
+            {
+              conversationId: payload.conversationId,
+              replyTo: payload.message.id,
+              task: payload.task || null,
+            },
+            {
+              status: "failed",
+              runId,
+              runStatus: "failed",
+              summary: "任务执行失败",
+              error: error.message || "处理失败",
+            }
+          )
+        );
+        updateRuntimeState({
+          status: "blocked",
+          currentTaskId: taskId,
+          currentRunId: runId,
+          summary: error.message || "任务执行失败",
+        });
       }
     }
   });
 
   ws.on("close", () => {
+    stopHeartbeat();
     const retryDelay = authFailed ? 10000 : 2000;
     console.log(
       authFailed

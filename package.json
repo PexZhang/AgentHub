@@ -7,10 +7,15 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "agent": "node agent/index.js",
+    "agent:doctor": "node agent/doctor.js",
+    "agent:onboard:codex": "node agent/onboard.js",
     "agent:echo": "AGENT_ID=echo-agent AGENT_NAME='Echo Agent' AGENT_MODE=echo node agent/index.js",
     "agent:codex": "AGENT_ID=codex-agent AGENT_NAME='Codex Agent' AGENT_MODE=codex node agent/index.js",
     "agent:openai": "AGENT_ID=openai-agent AGENT_NAME='OpenAI Agent' AGENT_MODE=openai node agent/index.js",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke-test.js",
+    "smoke:manager": "node scripts/manager-smoke-test.js",
+    "smoke:manager:stack": "node scripts/manager-stack-smoke-test.js",
+    "smoke:onboard": "node scripts/onboard-smoke-test.js"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
