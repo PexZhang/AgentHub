@@ -33,9 +33,10 @@ const MANAGER_REASONING_EFFORT =
   normalizeText(process.env.MANAGER_REASONING_EFFORT) || "low";
 const MANAGER_TEXT_VERBOSITY =
   normalizeText(process.env.MANAGER_TEXT_VERBOSITY) || "low";
+const DEFAULT_MANAGER_REQUEST_TIMEOUT_MS = MANAGER_PROVIDER === "zhipu" ? 30000 : 15000;
 const MANAGER_REQUEST_TIMEOUT_MS = Math.max(
   3000,
-  Number(process.env.MANAGER_REQUEST_TIMEOUT_MS || 15000)
+  Number(process.env.MANAGER_REQUEST_TIMEOUT_MS || DEFAULT_MANAGER_REQUEST_TIMEOUT_MS)
 );
 const MANAGER_MAX_TOOL_LOOPS = 6;
 const SNAPSHOT_MANAGER_MESSAGE_LIMIT = Math.max(
@@ -154,6 +155,7 @@ function buildManagerPrompt() {
     "当用户问待审批事项或风险时，调用 list_approvals；当用户明确表示同意、批准、拒绝时，必须调用 resolve_approval。",
     "当用户要求催办、补充要求、提醒员工汇报、让员工继续推进或先停一下时，优先调用 follow_up_with_employee。",
     "当用户要求切到和某个员工的对话时，必须调用 switch_to_employee_chat。",
+    "当用户说的是泛称，例如 codex / claude / openai，而当前存在多个同类员工时，不要自己替他选；要明确要求他给出具体员工名。",
     "当你分派任务时，优先调用 assign_task_to_employee，并尽量给出清晰的 task_title 和 success_signal。",
     "如果用户问的是某个对象的详细信息，就展开该对象，不要只重复总览。",
     "如果用户是在追问上一轮结果，延续上下文回答，不要把对话重置成总览介绍。",
@@ -2434,6 +2436,7 @@ function isAttentionQuestion(text) {
 
 function shouldPreferDeterministicManagerFlow(text, snapshot = buildSnapshot()) {
   const mentionedAgent = findMentionedAgent(snapshot, text);
+  const directChatIntent = analyzeDirectChatIntent(text, snapshot);
 
   if (
     isManagerIdentityQuestion(text) ||
@@ -2446,6 +2449,7 @@ function shouldPreferDeterministicManagerFlow(text, snapshot = buildSnapshot()) 
   }
 
   if (
+    directChatIntent ||
     /(审批|授权|批准|风险)/.test(text) ||
     (mentionedAgent && isEmployeeDiagnosisQuestion(text)) ||
     (mentionedAgent && isEmployeeDetailQuestion(text)) ||
@@ -3776,6 +3780,79 @@ function findMentionedAgent(snapshot, text) {
     });
 }
 
+function getLatestAssistantManagerText() {
+  const messages = store.listManagerMessages();
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && normalizeText(message.text)) {
+      return normalizeText(message.text);
+    }
+  }
+
+  return "";
+}
+
+function extractEmployeeReferenceCandidate(text) {
+  return normalizeText(text)
+    .replace(/^(帮我|麻烦你|请|直接|现在|我要|我想|给我|继续|那就)/g, "")
+    .replace(
+      /(切到|直连|对话|连接|进入|打开|连到|切换到|带我去|跳到|切过去|连过去|去找|找一下)/g,
+      " "
+    )
+    .replace(/\b(和|与|到|去|一下)\b/g, " ")
+    .replace(/[，。！？,.!?:："'“”‘’]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function analyzeDirectChatIntent(text, snapshot) {
+  const normalizedText = normalizeText(text);
+  const directVerbRequested =
+    /(切到|直连|对话|连接|进入|打开|连到|切换到|带我去|跳到|切过去|连过去)/.test(
+      normalizedText
+    );
+  const clarificationRequested =
+    /(没识别出目标|需要你确认|匹配到多位|找到多位|当前员工有|请更具体|说一下具体是哪位|指出具体员工名)/.test(
+      getLatestAssistantManagerText()
+    );
+
+  if (!directVerbRequested && !clarificationRequested) {
+    return null;
+  }
+
+  const candidate = extractEmployeeReferenceCandidate(normalizedText);
+  if (!candidate) {
+    return {
+      type: "missing",
+      candidate: "",
+      matches: [],
+    };
+  }
+
+  const matches = resolveEmployeeMatches(candidate, snapshot);
+  if (matches.length === 1) {
+    return {
+      type: "resolved",
+      candidate,
+      matches,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      type: "ambiguous",
+      candidate,
+      matches,
+    };
+  }
+
+  return {
+    type: "not_found",
+    candidate,
+    matches: [],
+  };
+}
+
 function extractStructuredRef(text, pattern) {
   const match = String(text || "").match(pattern);
   return match?.[0] || "";
@@ -3835,6 +3912,7 @@ function describeManagerModelError(error) {
 async function runLocalManager(text) {
   const snapshot = buildSnapshot();
   const mentionedAgent = findMentionedAgent(snapshot, text);
+  const directChatIntent = analyzeDirectChatIntent(text, snapshot);
   const isApprovalDecision = /(批准|同意|通过|驳回|拒绝)/.test(text);
 
   if (isManagerIdentityQuestion(text)) {
@@ -3903,6 +3981,52 @@ async function runLocalManager(text) {
     if (result.output?.ok) {
       return {
         text: `${result.output.diagnosis} ${result.output.recommendedAction}`.trim(),
+        action: result.clientAction,
+      };
+    }
+  }
+
+  if (directChatIntent) {
+    if (directChatIntent.type === "missing") {
+      return {
+        text: `我可以帮你切到具体员工的直连，但你还没说是哪位。当前员工有：${snapshot.agents
+          .map((agent) => agent.name)
+          .join("、")}。`,
+        action: null,
+      };
+    }
+
+    if (directChatIntent.type === "ambiguous") {
+      return {
+        text: `“${directChatIntent.candidate}”目前会匹配到多位员工：${directChatIntent.matches
+          .map((agent) => agent.name)
+          .join("、")}。请直接说具体员工名，我再帮你切过去。`,
+        action: null,
+      };
+    }
+
+    if (directChatIntent.type === "not_found") {
+      return {
+        text: `我还没找到“${directChatIntent.candidate}”对应的员工。当前员工有：${snapshot.agents
+          .map((agent) => agent.name)
+          .join("、")}。`,
+        action: null,
+      };
+    }
+
+    if (directChatIntent.type === "resolved") {
+      const result = await switchToEmployeeChat(directChatIntent.matches[0].name);
+      if (!result.output.ok) {
+        return {
+          text: result.output.message || "我还没找到要切换的员工。",
+          action: null,
+        };
+      }
+
+      const taskTitle =
+        result.output.currentTask?.title || result.output.agent.currentTaskTitle || "暂无明确任务";
+      return {
+        text: `已切到和 ${directChatIntent.matches[0].name} 的直连对话。当前他正在处理“${taskTitle}”。`,
         action: result.clientAction,
       };
     }
