@@ -193,6 +193,33 @@ function updateViewportHeight() {
   document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
 }
 
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function scrollRootToTop() {
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+}
+
+function syncKeyboardMode() {
+  const keyboardOpen = isMobileLayout() && document.activeElement === managerInput;
+
+  document.body.classList.toggle("keyboard-open", keyboardOpen);
+
+  if (!keyboardOpen) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    scrollRootToTop();
+    if (managerMessagesNode) {
+      managerMessagesNode.scrollTop = managerMessagesNode.scrollHeight;
+    }
+  });
+}
+
 function syncComposerHeight() {
   if (!managerInput) {
     return;
@@ -200,6 +227,42 @@ function syncComposerHeight() {
 
   managerInput.style.height = "auto";
   managerInput.style.height = `${Math.min(managerInput.scrollHeight, 160)}px`;
+}
+
+function updateManagerSendButtonState() {
+  if (!managerSendButton) {
+    return;
+  }
+
+  managerSendButton.disabled = !state.connected || !managerInput?.value.trim();
+}
+
+function submitManagerMessage() {
+  const text = managerInput?.value.trim();
+  if (!text || !state.socket || state.socket.readyState !== 1) {
+    updateManagerSendButtonState();
+    return false;
+  }
+
+  state.socket.send(
+    JSON.stringify({
+      type: "manager_message",
+      text,
+    })
+  );
+
+  setManagerInputValue("");
+  state.ui.pendingAutoScroll = true;
+
+  if (isMobileLayout()) {
+    managerInput.blur();
+    syncKeyboardMode();
+  } else {
+    managerInput.focus();
+  }
+
+  updateManagerSendButtonState();
+  return true;
 }
 
 function openAuthPrompt(message = "") {
@@ -244,7 +307,7 @@ function renderConnection() {
   socketDot?.classList.toggle("online", state.connected);
   if (socketText) {
     socketText.textContent = state.connected
-      ? "已连接"
+      ? "Hub已连接"
       : state.auth.promptOpen
         ? "等待令牌"
         : "连接中断";
@@ -492,7 +555,7 @@ function renderManagerPanel() {
   );
 
   if (renderSignature === state.ui.lastRenderSignature) {
-    managerSendButton.disabled = !state.connected;
+    updateManagerSendButtonState();
     state.ui.pendingAutoScroll = false;
     return;
   }
@@ -594,7 +657,7 @@ function renderManagerPanel() {
     return message?.text || "";
   });
 
-  managerSendButton.disabled = !state.connected;
+  updateManagerSendButtonState();
   if (shouldAutoScroll) {
     requestAnimationFrame(() => {
       managerMessagesNode.scrollTo({
@@ -752,34 +815,40 @@ function connect() {
 
 managerComposer.addEventListener("submit", (event) => {
   event.preventDefault();
+  submitManagerMessage();
+});
 
-  const text = managerInput.value.trim();
-  if (!text || !state.socket || state.socket.readyState !== 1) {
-    return;
-  }
-
-  state.socket.send(
-    JSON.stringify({
-      type: "manager_message",
-      text,
-    })
-  );
-
-  setManagerInputValue("");
-  state.ui.pendingAutoScroll = true;
-  managerInput.focus();
+managerSendButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  submitManagerMessage();
 });
 
 managerInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    managerComposer.requestSubmit();
+    submitManagerMessage();
   }
 });
-managerInput.addEventListener("input", syncComposerHeight);
+managerInput.addEventListener("input", () => {
+  syncComposerHeight();
+  updateManagerSendButtonState();
+});
+managerInput.addEventListener("focus", () => {
+  syncKeyboardMode();
+  setTimeout(syncKeyboardMode, 80);
+});
+managerInput.addEventListener("blur", () => {
+  setTimeout(syncKeyboardMode, 120);
+});
 
-window.addEventListener("resize", updateViewportHeight);
-window.visualViewport?.addEventListener("resize", updateViewportHeight);
+function handleViewportChange() {
+  updateViewportHeight();
+  syncKeyboardMode();
+}
+
+window.addEventListener("resize", handleViewportChange);
+window.visualViewport?.addEventListener("resize", handleViewportChange);
+window.visualViewport?.addEventListener("scroll", handleViewportChange);
 
 function setManagerContextCollapsed(nextValue) {
   state.ui.contextCollapsed = Boolean(nextValue);
@@ -796,7 +865,9 @@ managerContextCollapseButton?.addEventListener("click", () => {
 });
 
 updateViewportHeight();
+updateManagerSendButtonState();
 bindManagerScrollTracking();
 syncComposerHeight();
+syncKeyboardMode();
 connect();
 render();

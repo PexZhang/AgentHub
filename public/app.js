@@ -158,6 +158,7 @@ const STATUS_LABELS = {
   queued: "排队中",
   sent: "已发送",
   processing: "处理中",
+  waiting_reconnect: "等待重连",
   answered: "已完成",
   failed: "失败",
 };
@@ -174,8 +175,81 @@ function updateViewportHeight() {
   document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
 }
 
+function scrollRootToTop() {
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+}
+
+function syncKeyboardMode() {
+  const keyboardOpen = isMobileLayout() && document.activeElement === messageInput;
+
+  document.body.classList.toggle("keyboard-open", keyboardOpen);
+
+  if (!keyboardOpen) {
+    return;
+  }
+
+  setMobileView("chat", { skipPersist: true });
+
+  requestAnimationFrame(() => {
+    scrollRootToTop();
+    if (messagesNode) {
+      messagesNode.scrollTop = messagesNode.scrollHeight;
+    }
+  });
+}
+
 function isMobileLayout() {
   return window.matchMedia("(max-width: 720px)").matches;
+}
+
+function updateSendButtonState() {
+  if (!sendButton) {
+    return;
+  }
+
+  sendButton.disabled = !state.connected || !state.activeAgentId || !messageInput?.value.trim();
+}
+
+function submitDirectMessage() {
+  const text = messageInput?.value.trim();
+  if (!text || !state.activeAgentId || !state.socket || state.socket.readyState !== 1) {
+    updateSendButtonState();
+    return false;
+  }
+
+  sendAction({
+    type: "user_message",
+    agentId: state.activeAgentId,
+    conversationId: state.activeConversationId,
+    text,
+  });
+
+  messageInput.value = "";
+
+  if (isMobileLayout()) {
+    messageInput.blur();
+    syncKeyboardMode();
+  } else {
+    messageInput.focus();
+  }
+
+  updateSendButtonState();
+  return true;
+}
+
+function getConversationMessageDisplayStatus(message, agent) {
+  const baseStatus = String(message?.status || "").trim();
+  if (
+    message?.role === "user" &&
+    !agent?.online &&
+    ["sent", "processing"].includes(baseStatus)
+  ) {
+    return "waiting_reconnect";
+  }
+
+  return baseStatus;
 }
 
 function setMobileView(view, options = {}) {
@@ -1581,7 +1655,7 @@ function renderMessages() {
 
   renderThreadStrip(agent);
   renderMessageToolbar(agent, conversation);
-  sendButton.disabled = !state.connected;
+  updateSendButtonState();
 
   if (!conversation || conversation.messages.length === 0) {
     state.messageViewport.lastRenderSignature = buildConversationRenderSignature(
@@ -1601,9 +1675,11 @@ function renderMessages() {
 
   const hiddenMessageCount = conversation.hiddenMessageCount || 0;
   const lastMessage = conversation.messages[conversation.messages.length - 1] || null;
+  const lastMessageDisplayStatus = getConversationMessageDisplayStatus(lastMessage, agent);
   const shouldShowTyping =
     lastMessage?.role === "user" &&
-    ["queued", "sent", "processing"].includes(lastMessage.status);
+    agent?.online &&
+    ["queued", "sent", "processing"].includes(lastMessageDisplayStatus);
   const renderSignature = buildConversationRenderSignature(
     conversationId,
     conversation.messages,
@@ -1626,10 +1702,11 @@ function renderMessages() {
       conversation.messages
       .map((message) => {
       const roleClass = message.role === "assistant" ? "assistant" : "user";
-      const statusLabel = STATUS_LABELS[message.status] || message.status || "";
+      const displayStatus = getConversationMessageDisplayStatus(message, agent);
+      const statusLabel = STATUS_LABELS[displayStatus] || displayStatus || "";
       const status =
         message.role === "user" && statusLabel
-          ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
+          ? `<span class="status-tag status-${escapeHtml(displayStatus)}">${escapeHtml(statusLabel)}</span>`
           : "";
       const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
       const errorMessage =
@@ -1825,7 +1902,7 @@ function renderDirectoryPicker() {
 function renderConnection() {
   socketDot.classList.toggle("online", state.connected);
   socketText.textContent = state.connected
-    ? "已连接"
+    ? "Hub已连接"
     : state.auth.promptOpen
       ? "等待令牌"
       : "连接中断";
@@ -1948,21 +2025,12 @@ agentsToggleButton?.addEventListener("click", () => {
 
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
+  submitDirectMessage();
+});
 
-  const text = messageInput.value.trim();
-  if (!text || !state.activeAgentId || !state.socket || state.socket.readyState !== 1) {
-    return;
-  }
-
-  sendAction({
-    type: "user_message",
-    agentId: state.activeAgentId,
-    conversationId: state.activeConversationId,
-    text,
-  });
-
-  messageInput.value = "";
-  messageInput.focus();
+sendButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  submitDirectMessage();
 });
 
 if (managerComposer && managerInput) {
@@ -1987,8 +2055,16 @@ if (managerComposer && managerInput) {
 messageInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    composer.requestSubmit();
+    submitDirectMessage();
   }
+});
+messageInput.addEventListener("input", updateSendButtonState);
+messageInput.addEventListener("focus", () => {
+  syncKeyboardMode();
+  setTimeout(syncKeyboardMode, 80);
+});
+messageInput.addEventListener("blur", () => {
+  setTimeout(syncKeyboardMode, 120);
 });
 
 if (managerInput && managerComposer) {
@@ -2021,9 +2097,16 @@ messageJumpButton.addEventListener("click", () => {
 });
 
 updateViewportHeight();
-window.addEventListener("resize", updateViewportHeight);
-window.addEventListener("orientationchange", updateViewportHeight);
-window.visualViewport?.addEventListener("resize", updateViewportHeight);
-window.visualViewport?.addEventListener("scroll", updateViewportHeight);
+updateSendButtonState();
+function handleViewportChange() {
+  updateViewportHeight();
+  syncKeyboardMode();
+}
+
+window.addEventListener("resize", handleViewportChange);
+window.addEventListener("orientationchange", handleViewportChange);
+window.visualViewport?.addEventListener("resize", handleViewportChange);
+window.visualViewport?.addEventListener("scroll", handleViewportChange);
+syncKeyboardMode();
 
 connect();

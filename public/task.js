@@ -5,6 +5,7 @@ const STATUS_LABELS = {
   queued: "排队中",
   sent: "已发送",
   processing: "处理中",
+  waiting_reconnect: "等待重连",
   answered: "已完成",
   failed: "失败",
 };
@@ -166,7 +167,7 @@ function renderConnection() {
   socketDot?.classList.toggle("online", state.connected);
   if (socketText) {
     socketText.textContent = state.connected
-      ? "已连接"
+      ? "Hub已连接"
       : state.auth.promptOpen
         ? "等待令牌"
         : "连接中断";

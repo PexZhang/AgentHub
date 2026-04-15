@@ -1645,7 +1645,8 @@ h2 {
 }
 
 .status-queued,
-.status-sent {
+.status-sent,
+.status-waiting_reconnect {
   color: #ffd277;
 }
 
@@ -1742,6 +1743,11 @@ h2 {
   background: linear-gradient(180deg, #68dcff 0%, #2f9ec9 100%);
   color: #062031;
   font-weight: 800;
+}
+
+.composer button:disabled {
+  opacity: 0.52;
+  filter: saturate(0.35);
 }
 
 .empty-card {
@@ -2144,19 +2150,21 @@ h2 {
   }
 
   .composer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
     gap: 8px;
-    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
     background: rgba(9, 18, 28, 0.96);
     backdrop-filter: blur(16px);
   }
 
   .composer textarea {
-    min-height: 48px;
+    min-height: 44px;
   }
 
   .composer button {
-    min-height: 48px;
+    min-height: 44px;
+    min-width: 84px;
   }
 
   .manager-home .composer,
@@ -2244,7 +2252,136 @@ h2 {
   }
 
   .shell[data-mobile-view="chat"] .conversation-panel {
-    height: calc(var(--app-height) - 116px);
-    max-height: calc(var(--app-height) - 116px);
+    height: calc(var(--app-height) - 72px);
+    max-height: calc(var(--app-height) - 72px);
+  }
+
+  .shell[data-mobile-view="chat"] .topbar {
+    gap: 6px;
+    padding: calc(6px + env(safe-area-inset-top)) 10px 4px;
+  }
+
+  .shell[data-mobile-view="chat"] .topbar > div:first-child {
+    display: none;
+  }
+
+  .shell[data-mobile-view="chat"] .topbar-actions {
+    width: 100%;
+    min-height: 0;
+  }
+
+  .shell[data-mobile-view="chat"] .nav-pill {
+    min-height: 38px;
+    padding: 8px 12px;
+  }
+
+  .shell[data-mobile-view="chat"] .conversation-panel > .panel-title-row {
+    padding: 8px 10px 4px;
+    max-height: none;
+  }
+
+  .shell[data-mobile-view="chat"] #conversation-title {
+    font-size: 15px;
+    line-height: 1.35;
+  }
+
+  .shell[data-mobile-view="chat"] #conversation-subtitle {
+    display: none;
+  }
+
+  .shell[data-mobile-view="chat"] .message-toolbar {
+    flex-wrap: nowrap;
+    gap: 5px;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 0 6px;
+    scrollbar-width: none;
+  }
+
+  .shell[data-mobile-view="chat"] .message-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .shell[data-mobile-view="chat"] .message-toolbar-pill {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 4px 7px;
+  }
+
+  .shell[data-mobile-view="chat"] .message-stage {
+    padding: 0 10px 8px;
+  }
+
+  .shell[data-mobile-view="chat"] .messages {
+    padding-bottom: 8px;
+  }
+
+  .shell[data-mobile-view="chat"] .composer {
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .shell[data-mobile-view="chat"] .mobile-nav {
+    bottom: 6px;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 16px;
+  }
+
+  .shell[data-mobile-view="chat"] .mobile-nav-button {
+    padding: 8px 10px;
+    border-radius: 14px;
+  }
+
+  .shell[data-mobile-view="chat"] .mobile-nav-label {
+    margin-bottom: 0;
+    font-size: 13px;
+  }
+
+  .shell[data-mobile-view="chat"] .mobile-nav-meta {
+    display: none;
+  }
+
+  .manager-home.keyboard-open .topbar,
+  .manager-home.keyboard-open #manager-context-body,
+  .manager-home.keyboard-open #manager-context-collapsed-bar,
+  .direct-home.keyboard-open .topbar,
+  .direct-home.keyboard-open .agents-panel,
+  .direct-home.keyboard-open .mobile-nav,
+  .direct-home.keyboard-open .conversation-panel > .panel-title-row,
+  .direct-home.keyboard-open .thread-strip {
+    display: none !important;
+  }
+
+  .manager-home.keyboard-open .manager-panel,
+  .direct-home.keyboard-open .conversation-panel {
+    height: var(--app-height);
+    max-height: var(--app-height);
+    min-height: 0;
+    border-radius: 0;
+    border-right: none;
+    border-bottom: none;
+    border-left: none;
+    box-shadow: none;
+  }
+
+  .manager-home.keyboard-open .manager-stage,
+  .direct-home.keyboard-open .message-stage {
+    padding-top: 0;
+    padding-bottom: 8px;
+  }
+
+  .manager-home.keyboard-open .messages,
+  .direct-home.keyboard-open .messages {
+    min-height: 0;
+    padding-bottom: 8px;
+  }
+
+  .manager-home.keyboard-open .composer,
+  .direct-home.keyboard-open .composer {
+    position: static;
+    bottom: auto;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    box-shadow: none;
   }
 }

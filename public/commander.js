@@ -300,7 +300,7 @@ function renderConnection() {
   socketDot?.classList.toggle("online", state.connected);
   if (socketText) {
     socketText.textContent = state.connected
-      ? "已连接"
+      ? "Hub已连接"
       : state.auth.promptOpen
         ? "等待令牌"
         : "连接中断";
