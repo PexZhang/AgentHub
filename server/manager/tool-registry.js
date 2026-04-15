@@ -28,6 +28,11 @@ function buildSpecs() {
       description: "列出当前有哪些数字员工，以及他们的在线状态和正在处理的任务。",
     }),
     baseSpec({
+      name: "list_attention_items",
+      description:
+        "盘点当前最需要经理关注的异常或风险，例如阻塞任务、待审批、离线但任务未结束、长时间无更新。",
+    }),
+    baseSpec({
       name: "search_manager_knowledge",
       description:
         "查询 AgentHub 的内置经理知识库，用于回答平台规则、接入方式、职责边界、架构原理和扩展方法。",
@@ -158,6 +163,38 @@ function buildSpecs() {
         },
       },
       required: ["employee_ref"],
+    }),
+    baseSpec({
+      name: "diagnose_employee_issue",
+      description:
+        "诊断某位数字员工的接入或执行异常，例如没接上、离线、没有工作区、任务久未更新或任务阻塞。",
+      properties: {
+        employee_ref: {
+          type: "string",
+          description: "员工名字、ID，或用户口头提到的员工称呼。",
+        },
+      },
+      required: ["employee_ref"],
+    }),
+    baseSpec({
+      name: "follow_up_with_employee",
+      description:
+        "代表经理向某位数字员工补充要求、催办或纠偏，不创建新任务，只发送一条跟进消息。",
+      properties: {
+        employee_ref: {
+          type: "string",
+          description: "要跟进的员工名字或 ID。",
+        },
+        message: {
+          type: "string",
+          description: "要发给员工的跟进内容。",
+        },
+        task_ref: {
+          type: "string",
+          description: "可选，关联某条任务，帮助定位正确的会话上下文。",
+        },
+      },
+      required: ["employee_ref", "message"],
     }),
     baseSpec({
       name: "switch_to_employee_chat",

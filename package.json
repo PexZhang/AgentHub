@@ -16,6 +16,7 @@
     "smoke:manager": "node scripts/manager-smoke-test.js",
     "smoke:manager:stack": "node scripts/manager-stack-smoke-test.js",
     "smoke:manager:knowledge": "node scripts/manager-knowledge-smoke-test.js",
+    "smoke:manager:supervision": "node scripts/manager-supervision-smoke-test.js",
     "smoke:onboard": "node scripts/onboard-smoke-test.js"
   },
   "dependencies": {
