@@ -28,6 +28,18 @@ function buildSpecs() {
       description: "列出当前有哪些数字员工，以及他们的在线状态和正在处理的任务。",
     }),
     baseSpec({
+      name: "search_manager_knowledge",
+      description:
+        "查询 AgentHub 的内置经理知识库，用于回答平台规则、接入方式、职责边界、架构原理和扩展方法。",
+      properties: {
+        query: {
+          type: "string",
+          description: "用户原始问题，或要检索的知识主题。",
+        },
+      },
+      required: ["query"],
+    }),
+    baseSpec({
       name: "list_tasks",
       description: "列出当前任务与整体进度，用于回答谁在忙、谁卡住了、谁最需要关注。",
       properties: {

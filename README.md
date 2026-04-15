@@ -244,6 +244,23 @@ MANAGER_OPENAI_API_KEY=你的 OpenAI API Key
 MANAGER_MODEL=gpt-5.4-mini
 ```
 
+### AI经理知识库怎么扩
+
+AI经理 现在不再只靠一段 prompt 硬记平台规则，而是会加载仓库里的经理知识条目。
+
+知识入口在：
+
+- [MANAGER_KNOWLEDGE.md](/Users/zhangpeng/ai-chat-mvp/MANAGER_KNOWLEDGE.md)
+- `knowledge/manager/*.md`
+
+推荐规则：
+
+1. 平台规则、接入方式、职责边界、术语解释 -> 加知识条目
+2. 在线状态、任务进度、审批列表 -> 加或改经理工具
+3. 员工注册、任务流转、审批协议变化 -> 更新协议和架构文档
+
+这能保证 AI经理 后续回答“别的 Agent 怎么接入平台”“平台是怎么工作的”“经理职责怎么扩”这类问题时，不需要把所有知识继续堆回 UI 或 prompt。
+
 ### Codex onboarding 现在推荐什么
 
 对多设备 Codex 来说，我现在最推荐的接入方式已经不再是“抄一串环境变量”，而是：

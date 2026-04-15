@@ -132,6 +132,29 @@ And not:
 
 `Human -> Device -> Agent -> Thread`
 
+### 6. Manager Knowledge Layer
+
+The AI Manager should not rely only on one giant prompt.
+
+AgentHub should keep a small, explicit manager knowledge layer for stable platform knowledge such as:
+
+- how new employees join the Hub
+- how to explain the device / employee / workspace model
+- what the manager is responsible for
+- how future contributors should expand manager duties
+
+This layer should live in tracked files, not only in chat history:
+
+- `knowledge/manager/*.md`
+
+And it should be exposed through a manager knowledge search surface, separate from live operational tools.
+
+The separation rule is:
+
+- stable platform knowledge -> manager knowledge base
+- live system state -> manager tools
+- execution behavior changes -> protocol / runtime / persistence updates
+
 ## AI-Friendly Repository Principles
 
 This repository should be intentionally optimized for AI contributors.
