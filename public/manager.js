@@ -1,3 +1,5 @@
+import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
+
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const STATUS_LABELS = {
   queued: "排队中",
@@ -467,6 +469,7 @@ function renderManagerPanel() {
         const statusMarkup = statusLabel
           ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
           : "";
+        const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
         const errorMarkup =
           message.role === "user" && message.errorMessage
             ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
@@ -482,6 +485,7 @@ function renderManagerPanel() {
             <div class="meta">
               <span>${formatTime(message.createdAt)}</span>
               ${statusMarkup}
+              ${copyMarkup}
             </div>
             ${actionMarkup}
             ${errorMarkup}
@@ -529,6 +533,11 @@ function renderManagerPanel() {
       const cursor = managerInput.value.length;
       managerInput.setSelectionRange(cursor, cursor);
     });
+  });
+
+  bindCopyMessageButtons(managerMessagesNode, (messageId) => {
+    const message = (state.manager.messages || []).find((item) => item.id === messageId);
+    return message?.text || "";
   });
 
   managerSendButton.disabled = !state.connected;

@@ -1,3 +1,5 @@
+import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
+
 const UI_PREFS_KEY = "agenthub-ui-prefs-v2";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const launchParams = new URLSearchParams(window.location.search);
@@ -867,6 +869,7 @@ function renderManagerPanel() {
         const statusMarkup = statusLabel
           ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
           : "";
+        const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
         const errorMarkup =
           message.role === "user" && message.errorMessage
             ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
@@ -899,6 +902,7 @@ function renderManagerPanel() {
             <div class="meta">
               <span>${formatTime(message.createdAt)}</span>
               ${statusMarkup}
+              ${copyMarkup}
             </div>
             ${actionMarkup}
             ${errorMarkup}
@@ -942,6 +946,11 @@ function renderManagerPanel() {
         console.error(error);
       }
     });
+  });
+
+  bindCopyMessageButtons(managerMessagesNode, (messageId) => {
+    const message = (state.manager.messages || []).find((item) => item.id === messageId);
+    return message?.text || "";
   });
 
   managerSendButton.disabled = !state.connected;
@@ -1539,6 +1548,7 @@ function renderMessages() {
         message.role === "user" && statusLabel
           ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
           : "";
+      const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
       const errorMessage =
         message.role === "user" && message.errorMessage
           ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
@@ -1551,6 +1561,7 @@ function renderMessages() {
           <div class="meta">
             <span>${formatTime(message.createdAt)}</span>
             ${status}
+            ${copyMarkup}
           </div>
           ${errorMessage}
         </article>
@@ -1573,6 +1584,12 @@ function renderMessages() {
 
     state.messageViewport.lastRenderSignature = renderSignature;
   }
+
+  bindCopyMessageButtons(messagesNode, (messageId) => {
+    const currentConversation = getActiveConversation();
+    const message = (currentConversation?.messages || []).find((item) => item.id === messageId);
+    return message?.text || "";
+  });
 
   requestAnimationFrame(() => {
     if (shouldAutoStick) {

@@ -1,3 +1,5 @@
+import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
+
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const STATUS_LABELS = {
   queued: "排队中",
@@ -765,6 +767,7 @@ function renderConversation(task, conversation, agent, workspace, approvals) {
         const statusMarkup = statusLabel
           ? `<span class="status-tag status-${escapeHtml(message.status || "")}">${escapeHtml(statusLabel)}</span>`
           : "";
+        const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
         const errorMarkup =
           message.role === "user" && message.errorMessage
             ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
@@ -778,6 +781,7 @@ function renderConversation(task, conversation, agent, workspace, approvals) {
             <div class="meta">
               <span>${formatTime(message.createdAt)}</span>
               ${statusMarkup}
+              ${copyMarkup}
             </div>
             ${errorMarkup}
           </article>
@@ -787,6 +791,14 @@ function renderConversation(task, conversation, agent, workspace, approvals) {
 
     state.ui.lastConversationRenderSignature = renderSignature;
   }
+
+  bindCopyMessageButtons(taskMessagesNode, (messageId) => {
+    const snapshot = getSnapshot();
+    const task = findTask(snapshot);
+    const conversation = findConversation(snapshot, task);
+    const message = (conversation?.messages || []).find((item) => item.id === messageId);
+    return message?.text || "";
+  });
 
   if (shouldAutoScroll) {
     requestAnimationFrame(() => {
