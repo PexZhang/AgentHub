@@ -1,5 +1,6 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 
+const UI_PREFS_KEY = "agenthub-manager-ui-v1";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const STATUS_LABELS = {
   queued: "排队中",
@@ -43,6 +44,7 @@ const state = {
     error: "",
   },
   ui: {
+    contextCollapsed: loadUiState().contextCollapsed,
     shouldStickToBottom: true,
     pendingAutoScroll: true,
     lastRenderSignature: "",
@@ -52,6 +54,8 @@ const state = {
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const managerSubtitle = document.querySelector("#manager-subtitle");
+const managerContextToggleButton = document.querySelector("#manager-context-toggle-button");
+const managerCollapsedSummary = document.querySelector("#manager-collapsed-summary");
 const managerStatusStrip = document.querySelector("#manager-status-strip");
 const managerMessagesNode = document.querySelector("#manager-messages");
 const managerComposer = document.querySelector("#manager-composer");
@@ -78,6 +82,35 @@ function persistStoredAppToken(token) {
     }
 
     window.localStorage.removeItem(APP_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function loadUiState() {
+  try {
+    const raw = window.localStorage.getItem(UI_PREFS_KEY);
+    if (!raw) {
+      return { contextCollapsed: true };
+    }
+
+    const parsed = JSON.parse(raw);
+    return {
+      contextCollapsed: parsed?.contextCollapsed !== false,
+    };
+  } catch {
+    return { contextCollapsed: true };
+  }
+}
+
+function persistUiState() {
+  try {
+    window.localStorage.setItem(
+      UI_PREFS_KEY,
+      JSON.stringify({
+        contextCollapsed: state.ui.contextCollapsed,
+      })
+    );
   } catch {
     // Ignore storage write failures.
   }
@@ -425,6 +458,28 @@ function renderManagerPanel() {
       .join("");
   }
 
+  if (managerContextToggleButton) {
+    managerContextToggleButton.textContent = state.ui.contextCollapsed ? "展开" : "收起";
+    managerContextToggleButton.setAttribute(
+      "aria-label",
+      state.ui.contextCollapsed ? "展开顶部内容" : "收起顶部内容"
+    );
+  }
+
+  if (managerCollapsedSummary) {
+    managerCollapsedSummary.hidden = !state.ui.contextCollapsed;
+    managerCollapsedSummary.textContent =
+      buildManagerStatusItems().join(" · ") || "展开后可以看到经理说明和当前状态。";
+  }
+
+  if (managerSubtitle) {
+    managerSubtitle.hidden = state.ui.contextCollapsed;
+  }
+
+  if (managerStatusStrip) {
+    managerStatusStrip.hidden = state.ui.contextCollapsed;
+  }
+
   const messages = state.manager.messages || [];
   const hiddenMessageCount = state.manager.hiddenMessageCount || 0;
   const lastMessage = messages[messages.length - 1] || null;
@@ -726,6 +781,12 @@ managerInput.addEventListener("input", syncComposerHeight);
 
 window.addEventListener("resize", updateViewportHeight);
 window.visualViewport?.addEventListener("resize", updateViewportHeight);
+
+managerContextToggleButton?.addEventListener("click", () => {
+  state.ui.contextCollapsed = !state.ui.contextCollapsed;
+  persistUiState();
+  renderManagerPanel();
+});
 
 updateViewportHeight();
 bindManagerScrollTracking();

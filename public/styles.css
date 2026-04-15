@@ -83,6 +83,10 @@ textarea {
   gap: 12px;
 }
 
+.panel-title-row > .session-action-button {
+  flex: 0 0 auto;
+}
+
 .topbar-text-link {
   color: var(--muted);
   font-size: 13px;
@@ -297,6 +301,10 @@ textarea {
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 16px 12px;
+}
+
+.manager-status-strip[hidden] {
+  display: none;
 }
 
 .manager-status-pill {
