@@ -101,6 +101,52 @@ npm run agent:onboard:codex -- \
 
 `--start` 现在会先自动跑一遍员工自检；如果自检没过，会直接阻止启动，避免“看起来启动了，实际上接不上 Hub”这种隐性故障。
 
+如果你这台机器希望 `开机登录后自动接回 AgentHub`，推荐直接把这位员工安装成 macOS `launchd` 自启动：
+
+```bash
+npm run agent:autostart:install -- \
+  --config ~/.agenthub/employees/codex-main.json
+```
+
+这条命令会：
+
+1. 在 `~/Library/LaunchAgents` 写入一份 LaunchAgent plist
+2. 立即加载它，让当前会话先自动拉起一次员工进程
+3. 把日志写到 `~/.agenthub/logs`
+4. 让这位员工在你下次开机登录后自动重新接入 Hub
+
+如果你想在 onboarding 完成时顺手一起装好，也可以：
+
+```bash
+npm run agent:onboard:codex -- \
+  --hub http://你的Hub地址:3000 \
+  --agent-token 你的AGENT_TOKEN \
+  --device-name "Office Mac" \
+  --agent-name "Codex Office" \
+  --root ~/Codes \
+  --doctor \
+  --autostart
+```
+
+常用维护命令：
+
+```bash
+# 查看当前自动接入状态
+npm run agent:autostart:install -- \
+  --config ~/.agenthub/employees/codex-main.json \
+  --status
+
+# 只写入启动项，不立即加载
+npm run agent:autostart:install -- \
+  --config ~/.agenthub/employees/codex-main.json \
+  --write-only
+
+# 移除自动接入
+npm run agent:autostart:install -- \
+  --config ~/.agenthub/employees/codex-main.json \
+  --uninstall
+```
+
 如果你已经有员工配置文件，再启动本地 Agent 就简单很多：
 
 ```bash
@@ -192,6 +238,7 @@ npm run agent:onboard:codex -- \
 
 ```env
 PORT=3000
+HOST=
 HUB_ORIGIN=http://localhost:3000
 APP_TOKEN=给手机网页使用的访问令牌
 AGENT_TOKEN=给本地 Agent 回连 Hub 使用的令牌
@@ -243,6 +290,20 @@ MANAGER_PROVIDER=openai
 MANAGER_OPENAI_API_KEY=你的 OpenAI API Key
 MANAGER_MODEL=gpt-5.4-mini
 ```
+
+如果你把 AgentHub 部署到云服务器，并且前面放了 Nginx/Caddy 之类的反向代理，建议把 Hub 只绑定到回环地址，避免 `3000` 直接暴露到公网：
+
+```env
+PORT=3000
+HOST=127.0.0.1
+HUB_ORIGIN=http://你的公网域名或IP
+```
+
+推荐公网入口：
+
+- `80/443` 由 Nginx 或 Caddy 对外监听
+- 反向代理到 `127.0.0.1:3000`
+- AgentHub 本体不再直接对公网监听 `3000`
 
 ### AI经理知识库怎么扩
 

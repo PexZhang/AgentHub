@@ -19,6 +19,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = String(process.env.HOST || "").trim();
 const DATA_FILE =
   normalizeText(process.env.DATA_FILE) || join(__dirname, "..", "data", "state.json");
 const MAX_RECENT_CODEX_SESSIONS = 12;
@@ -4938,6 +4939,7 @@ wss.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`AgentHub is listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST || undefined, () => {
+  const displayHost = HOST || "0.0.0.0";
+  console.log(`AgentHub is listening on http://${displayHost}:${PORT}`);
 });

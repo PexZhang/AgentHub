@@ -15,6 +15,7 @@ import {
   slugify,
   writeAgentConfigFile,
 } from "./config.js";
+import { installLaunchAgent } from "./launchd.js";
 
 function printUsage() {
   console.log(`
@@ -37,6 +38,7 @@ AgentHub Codex Onboarding
   --dry-run                   只打印将要写入的配置，不落盘
   --doctor                    写完配置后立即执行一次员工自检
   --start                     写完后立即启动这个 Codex 员工
+  --autostart                 安装为 macOS 登录自启，并立即加载
   --overwrite                 覆盖已有配置文件
 
 示例：
@@ -218,11 +220,30 @@ async function main() {
   console.log(`  npm run agent -- --config ${resolvedConfigPath}`);
   console.log("自检方式：");
   console.log(`  npm run agent:doctor -- --config ${resolvedConfigPath}`);
+  console.log("开机自动接入：");
+  console.log(`  npm run agent:autostart:install -- --config ${resolvedConfigPath}`);
 
-  if (args.doctor || args.start) {
+  if (args.doctor || args.start || args.autostart) {
     console.log("");
     console.log("正在执行员工自检...");
     await runDoctorCheck(resolvedConfigPath);
+  }
+
+  if (args.autostart) {
+    console.log("");
+    console.log("正在安装 macOS 登录自启...");
+    const launchAgent = await installLaunchAgent({
+      configPath: resolvedConfigPath,
+      agentId,
+      loadNow: true,
+    });
+    console.log(`已安装开机自动接入：${launchAgent.plistPath}`);
+    console.log(`日志：${launchAgent.stdoutPath}`);
+
+    if (args.start) {
+      console.log("已通过 launchd 立即拉起员工进程，跳过当前前台启动。");
+      return;
+    }
   }
 
   if (args.start) {

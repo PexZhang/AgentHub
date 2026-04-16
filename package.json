@@ -9,6 +9,7 @@
     "agent": "node agent/index.js",
     "agent:doctor": "node agent/doctor.js",
     "agent:onboard:codex": "node agent/onboard.js",
+    "agent:autostart:install": "node agent/install-launch-agent.js",
     "agent:echo": "AGENT_ID=echo-agent AGENT_NAME='Echo Agent' AGENT_MODE=echo node agent/index.js",
     "agent:codex": "AGENT_ID=codex-agent AGENT_NAME='Codex Agent' AGENT_MODE=codex node agent/index.js",
     "agent:openai": "AGENT_ID=openai-agent AGENT_NAME='OpenAI Agent' AGENT_MODE=openai node agent/index.js",
