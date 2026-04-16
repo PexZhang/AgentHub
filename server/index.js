@@ -4320,6 +4320,7 @@ app.get("/api/state", (request, response) => {
     return;
   }
 
+  response.set("Cache-Control", "no-store");
   response.json(buildSnapshot());
 });
 

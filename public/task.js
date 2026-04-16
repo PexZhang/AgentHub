@@ -1,4 +1,5 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
+import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
 
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const STATUS_LABELS = {
@@ -72,6 +73,13 @@ const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
 let taskScrollBound = false;
 
+function applySnapshot(snapshot) {
+  state.auth.promptOpen = false;
+  state.auth.blocked = false;
+  state.auth.error = "";
+  state.snapshot = snapshot || null;
+}
+
 function loadStoredAppToken() {
   try {
     return window.localStorage.getItem(APP_TOKEN_STORAGE_KEY) || "";
@@ -91,6 +99,29 @@ function persistStoredAppToken(token) {
   } catch {
     // Ignore storage write failures.
   }
+}
+
+async function refreshSnapshot() {
+  if (state.auth.blocked) {
+    return false;
+  }
+
+  const result = await fetchAuthenticatedSnapshot(state.auth.token || "");
+  if (result.authRequired) {
+    state.connected = false;
+    clearAuthToken();
+    openAuthPrompt(result.message || "访问令牌无效，请重新输入。");
+    render();
+    return false;
+  }
+
+  if (!result.ok) {
+    return false;
+  }
+
+  applySnapshot(result.data);
+  render();
+  return true;
 }
 
 function escapeHtml(text) {
@@ -234,6 +265,8 @@ function submitAuthToken(rawToken) {
   } else {
     connect();
   }
+
+  refreshSnapshot();
 }
 
 function renderAuthPrompt() {
@@ -856,6 +889,7 @@ function connect() {
         appOrigin: window.location.origin,
       })
     );
+    snapshotRecovery.scheduleSnapshotFallback("task-open");
     render();
   });
 
@@ -867,6 +901,7 @@ function connect() {
     render();
     if (!state.auth.blocked) {
       window.setTimeout(connect, 1500);
+      snapshotRecovery.scheduleSnapshotFallback("task-close");
     }
   });
 
@@ -884,10 +919,8 @@ function connect() {
     }
 
     if (payload.type === "snapshot") {
-      state.auth.promptOpen = false;
-      state.auth.blocked = false;
-      state.auth.error = "";
-      state.snapshot = payload.data || null;
+      snapshotRecovery.clearSnapshotFallback();
+      applySnapshot(payload.data);
       if (state.ui.approvalPendingId) {
         const stillPending = (state.snapshot?.approvals || []).some(
           (approval) =>
@@ -925,6 +958,13 @@ function connect() {
   });
 }
 
+const snapshotRecovery = installSnapshotRecovery({
+  connect,
+  refreshSnapshot,
+  isAuthBlocked: () => state.auth.blocked,
+  hasSnapshot: () => Boolean(state.snapshot),
+});
+
 taskMessageJumpButton?.addEventListener("click", () => {
   taskMessagesNode?.scrollTo({
     top: taskMessagesNode.scrollHeight,
@@ -938,4 +978,5 @@ window.visualViewport?.addEventListener("resize", updateViewportHeight);
 updateViewportHeight();
 bindTaskScrollTracking();
 connect();
+refreshSnapshot();
 render();

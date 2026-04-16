@@ -1,4 +1,5 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
+import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
 
 const UI_PREFS_KEY = "agenthub-manager-ui-v1";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
@@ -70,6 +71,16 @@ const authModalContent = document.querySelector("#auth-modal-content");
 let managerScrollBound = false;
 let routePromptApplied = false;
 
+function applySnapshot(snapshot) {
+  state.auth.promptOpen = false;
+  state.auth.blocked = false;
+  state.auth.error = "";
+  state.agents = snapshot?.agents || [];
+  state.devices = snapshot?.devices || [];
+  state.tasks = snapshot?.tasks || [];
+  state.manager = snapshot?.manager || state.manager;
+}
+
 function loadStoredAppToken() {
   try {
     return window.localStorage.getItem(APP_TOKEN_STORAGE_KEY) || "";
@@ -118,6 +129,29 @@ function persistUiState() {
   } catch {
     // Ignore storage write failures.
   }
+}
+
+async function refreshSnapshot() {
+  if (state.auth.blocked) {
+    return false;
+  }
+
+  const result = await fetchAuthenticatedSnapshot(state.auth.token || "");
+  if (result.authRequired) {
+    state.connected = false;
+    clearAuthToken();
+    openAuthPrompt(result.message || "访问令牌无效，请重新输入。");
+    render();
+    return false;
+  }
+
+  if (!result.ok) {
+    return false;
+  }
+
+  applySnapshot(result.data);
+  render();
+  return true;
 }
 
 function escapeHtml(text) {
@@ -301,6 +335,8 @@ function submitAuthToken(rawToken) {
   } else {
     connect();
   }
+
+  refreshSnapshot();
 }
 
 function renderConnection() {
@@ -771,6 +807,7 @@ function connect() {
         appOrigin: window.location.origin,
       })
     );
+    snapshotRecovery.scheduleSnapshotFallback("manager-open");
     render();
   });
 
@@ -782,6 +819,7 @@ function connect() {
     render();
     if (!state.auth.blocked) {
       setTimeout(connect, 1500);
+      snapshotRecovery.scheduleSnapshotFallback("manager-close");
     }
   });
 
@@ -799,19 +837,27 @@ function connect() {
     }
 
     if (payload.type === "snapshot") {
-      state.auth.promptOpen = false;
-      state.auth.blocked = false;
-      state.auth.error = "";
-      state.agents = payload.data.agents || [];
-      state.devices = payload.data.devices || [];
-      state.tasks = payload.data.tasks || [];
-      state.manager = payload.data.manager || state.manager;
+      snapshotRecovery.clearSnapshotFallback();
+      applySnapshot(payload.data);
       render();
       return;
     }
 
   });
 }
+
+const snapshotRecovery = installSnapshotRecovery({
+  connect,
+  refreshSnapshot,
+  isAuthBlocked: () => state.auth.blocked,
+  hasSnapshot: () =>
+    Boolean(
+      state.manager?.messages?.length ||
+        state.agents.length ||
+        state.devices.length ||
+        state.tasks.length
+    ),
+});
 
 managerComposer.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -870,4 +916,5 @@ bindManagerScrollTracking();
 syncComposerHeight();
 syncKeyboardMode();
 connect();
+refreshSnapshot();
 render();
