@@ -3793,6 +3793,52 @@ function getLatestAssistantManagerText() {
   return "";
 }
 
+function isEmployeeRosterQuestion(text) {
+  return /(谁在线|谁离线|在线员工|离线员工|当前有哪些员工|现在有哪些员工|员工有哪些|有哪些员工|员工列表|当前员工|数字员工有哪些|当前有谁在线)/.test(
+    normalizeText(text)
+  );
+}
+
+function isGenericEmployeeReferenceCandidate(candidate) {
+  const normalized = normalizeText(candidate).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    /^(员工|数字员工|员工们|所有员工|全部员工|在线员工|离线员工|agent|agents|员工列表|当前员工|谁在线|谁离线)$/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  return /^((当前|现在|哪些|哪个|谁|在线|离线|所有|全部|数字|位|个|有|在|的|员工|agent|agents)\s*)+$/i.test(
+    normalized
+  );
+}
+
+function shouldTreatAsDirectChatClarificationReply(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    isEmployeeRosterQuestion(normalized) ||
+    isManagerIdentityQuestion(normalized) ||
+    isManagerCapabilityQuestion(normalized) ||
+    isOnboardingGuideQuestion(normalized) ||
+    isManagerKnowledgeQuestion(normalized) ||
+    isAttentionQuestion(normalized) ||
+    /(任务|进度|状态|做到哪|完成没|卡住|审批|授权|批准|风险)/.test(normalized)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function extractEmployeeReferenceCandidate(text) {
   return normalizeText(text)
     .replace(/^(帮我|麻烦你|请|直接|现在|我要|我想|给我|继续|那就)/g, "")
@@ -3816,13 +3862,15 @@ function analyzeDirectChatIntent(text, snapshot) {
     /(没识别出目标|需要你确认|匹配到多位|找到多位|当前员工有|请更具体|说一下具体是哪位|指出具体员工名)/.test(
       getLatestAssistantManagerText()
     );
+  const clarificationReply =
+    clarificationRequested && shouldTreatAsDirectChatClarificationReply(normalizedText);
 
-  if (!directVerbRequested && !clarificationRequested) {
+  if (!directVerbRequested && !clarificationReply) {
     return null;
   }
 
   const candidate = extractEmployeeReferenceCandidate(normalizedText);
-  if (!candidate) {
+  if (!candidate || isGenericEmployeeReferenceCandidate(candidate)) {
     return {
       type: "missing",
       candidate: "",
