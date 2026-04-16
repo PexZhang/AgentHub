@@ -241,6 +241,7 @@ function buildDefaultManagerState() {
 function normalizeManagerMessage(message) {
   return {
     id: normalizeText(message?.id) || randomUUID(),
+    clientMessageId: normalizeText(message?.clientMessageId) || null,
     role: normalizeText(message?.role) === "assistant" ? "assistant" : "user",
     text: normalizeText(message?.text),
     createdAt: normalizeText(message?.createdAt) || new Date().toISOString(),
@@ -1250,6 +1251,19 @@ class JsonStore {
     return message;
   }
 
+  findManagerMessageByClientMessageId(clientMessageId) {
+    const normalizedClientMessageId = normalizeText(clientMessageId);
+    if (!normalizedClientMessageId) {
+      return null;
+    }
+
+    return (
+      this.getManagerState().messages.find(
+        (message) => normalizeText(message.clientMessageId) === normalizedClientMessageId
+      ) || null
+    );
+  }
+
   async setManagerPreviousResponseId(previousResponseId) {
     this.getManagerState().previousResponseId = normalizeText(previousResponseId) || null;
     await this.persist();
@@ -1270,6 +1284,28 @@ class JsonStore {
     conversation.updatedAt = new Date().toISOString();
     await this.persist();
     return message;
+  }
+
+  findConversationMessageByClientMessageId(clientMessageId) {
+    const normalizedClientMessageId = normalizeText(clientMessageId);
+    if (!normalizedClientMessageId) {
+      return null;
+    }
+
+    for (const conversation of this.state.conversations) {
+      const message =
+        conversation.messages.find(
+          (item) => normalizeText(item.clientMessageId) === normalizedClientMessageId
+        ) || null;
+      if (message) {
+        return {
+          conversation,
+          message,
+        };
+      }
+    }
+
+    return null;
   }
 
   listQueuedMessages(agentId) {
@@ -1708,11 +1744,21 @@ async function submitUserTaskToEmployee({
   agentId,
   text,
   requestedConversationId = null,
+  clientMessageId = null,
   title = null,
   workspaceId = null,
   requestedBy = "human",
   taskDraft = null,
 }) {
+  const existing = store.findConversationMessageByClientMessageId(clientMessageId);
+  if (existing) {
+    return {
+      conversation: existing.conversation,
+      message: existing.message,
+      task: store.findTaskBySourceMessageId(existing.message.id),
+    };
+  }
+
   const agentConnection = agentClients.get(agentId);
   let conversation = requestedConversationId ? store.getConversation(requestedConversationId) : null;
 
@@ -1754,6 +1800,7 @@ async function submitUserTaskToEmployee({
 
   const message = {
     id: randomUUID(),
+    clientMessageId: normalizeText(clientMessageId) || null,
     role: "user",
     text,
     agentId,
@@ -4294,7 +4341,16 @@ function enqueueManagerTask(task) {
 }
 
 app.use(express.json());
-app.use(express.static(join(__dirname, "..", "public")));
+app.use(
+  express.static(join(__dirname, "..", "public"), {
+    setHeaders(response) {
+      // AgentHub is iterating quickly across devices and browsers; prefer
+      // freshness over asset caching so mobile clients don't get stuck on
+      // stale HTML/JS after auth or deploy transitions.
+      response.set("Cache-Control", "no-store");
+    },
+  })
+);
 
 app.get("/api/health", (_request, response) => {
   const snapshot = buildSnapshot();
@@ -4540,6 +4596,7 @@ wss.on("connection", (socket) => {
 
       if (payload.type === "manager_message" && socket.clientRole === "app") {
         const text = normalizeText(payload.text);
+        const clientMessageId = normalizeText(payload.clientMessageId);
         if (!text) {
           sendJson(socket, {
             type: "error",
@@ -4548,8 +4605,15 @@ wss.on("connection", (socket) => {
           return;
         }
 
+        const existingMessage = store.findManagerMessageByClientMessageId(clientMessageId);
+        if (existingMessage) {
+          broadcastSnapshot();
+          return;
+        }
+
         const userMessage = await store.addManagerMessage({
           id: randomUUID(),
+          clientMessageId,
           role: "user",
           text,
           status: "processing",
@@ -4602,6 +4666,7 @@ wss.on("connection", (socket) => {
         const text = normalizeText(payload.text);
         const requestedAgentId = normalizeText(payload.agentId);
         const requestedConversationId = normalizeText(payload.conversationId);
+        const clientMessageId = normalizeText(payload.clientMessageId);
         let conversation = requestedConversationId
           ? store.getConversation(requestedConversationId)
           : null;
@@ -4625,6 +4690,7 @@ wss.on("connection", (socket) => {
           agentId,
           text,
           requestedConversationId,
+          clientMessageId,
           requestedBy: "human",
         });
         broadcastSnapshot();

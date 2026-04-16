@@ -1,5 +1,15 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
+import {
+  LOCAL_OUTBOX_MAX_MESSAGES,
+  LOCAL_PENDING_STATUS,
+  LOCAL_SENDING_STATUS,
+  countActiveLocalOutboxMessages,
+  createLocalOutboxMessage,
+  expireLocalOutboxMessages,
+  flushLocalOutboxMessages,
+  mergeServerAndLocalMessages,
+} from "./message-outbox.js";
 
 const UI_PREFS_KEY = "agenthub-manager-ui-v1";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
@@ -7,6 +17,8 @@ const STATUS_LABELS = {
   queued: "排队中",
   sent: "已发送",
   processing: "处理中",
+  [LOCAL_PENDING_STATUS]: "待重连",
+  [LOCAL_SENDING_STATUS]: "补发中",
   answered: "已完成",
   failed: "失败",
 };
@@ -37,6 +49,7 @@ const state = {
       recentTaskCount: 0,
     },
   },
+  localOutbox: [],
   auth: {
     token: loadStoredAppToken(),
     input: "",
@@ -263,19 +276,105 @@ function syncComposerHeight() {
   managerInput.style.height = `${Math.min(managerInput.scrollHeight, 160)}px`;
 }
 
+function reconcileManagerLocalOutbox() {
+  const expired = expireLocalOutboxMessages(state.localOutbox);
+  if (expired.changed) {
+    state.localOutbox = expired.messages;
+  }
+
+  const merged = mergeServerAndLocalMessages(state.manager.messages || [], state.localOutbox);
+  if (merged.changed) {
+    state.localOutbox = merged.localMessages;
+  }
+
+  return merged.messages;
+}
+
+function enqueueManagerLocalMessage(text) {
+  const trimmedText = String(text || "").trim();
+  if (!trimmedText) {
+    return false;
+  }
+
+  const activeCount = countActiveLocalOutboxMessages(state.localOutbox);
+  if (activeCount >= LOCAL_OUTBOX_MAX_MESSAGES) {
+    state.localOutbox = [
+      ...state.localOutbox,
+      createLocalOutboxMessage({
+        kind: "manager",
+        text: trimmedText,
+        status: "failed",
+        errorMessage: `离线待发上限为 ${LOCAL_OUTBOX_MAX_MESSAGES} 条，这条消息没有进入自动补发队列。`,
+      }),
+    ];
+    return false;
+  }
+
+  state.localOutbox = [
+    ...state.localOutbox,
+    createLocalOutboxMessage({
+      kind: "manager",
+      text: trimmedText,
+    }),
+  ];
+  return true;
+}
+
+function flushManagerLocalOutbox() {
+  const expired = expireLocalOutboxMessages(state.localOutbox);
+  if (expired.changed) {
+    state.localOutbox = expired.messages;
+  }
+
+  const flushed = flushLocalOutboxMessages(state.localOutbox, {
+    send(message) {
+      if (!state.socket || state.socket.readyState !== 1) {
+        return false;
+      }
+
+      state.socket.send(
+        JSON.stringify({
+          type: "manager_message",
+          text: message.text,
+          clientMessageId: message.clientMessageId,
+        })
+      );
+      return true;
+    },
+  });
+
+  if (flushed.changed) {
+    state.localOutbox = flushed.messages;
+  }
+}
+
 function updateManagerSendButtonState() {
   if (!managerSendButton) {
     return;
   }
 
-  managerSendButton.disabled = !state.connected || !managerInput?.value.trim();
+  const queueFull =
+    !state.connected && countActiveLocalOutboxMessages(state.localOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES;
+  managerSendButton.disabled =
+    state.auth.blocked ||
+    !managerInput?.value.trim() ||
+    queueFull;
 }
 
 function submitManagerMessage() {
   const text = managerInput?.value.trim();
-  if (!text || !state.socket || state.socket.readyState !== 1) {
+  if (!text) {
     updateManagerSendButtonState();
     return false;
+  }
+
+  if (!state.socket || state.socket.readyState !== 1) {
+    const queued = enqueueManagerLocalMessage(text);
+    setManagerInputValue("");
+    state.ui.pendingAutoScroll = true;
+    updateManagerSendButtonState();
+    render();
+    return queued;
   }
 
   state.socket.send(
@@ -580,7 +679,7 @@ function renderManagerPanel() {
       buildManagerStatusItems().join(" · ") || "展开后可以看到经理说明和当前状态。";
   }
 
-  const messages = state.manager.messages || [];
+  const messages = reconcileManagerLocalOutbox();
   const hiddenMessageCount = state.manager.hiddenMessageCount || 0;
   const lastMessage = messages[messages.length - 1] || null;
   const shouldShowTyping =
@@ -691,7 +790,7 @@ function renderManagerPanel() {
   });
 
   bindCopyMessageButtons(managerMessagesNode, (messageId) => {
-    const message = (state.manager.messages || []).find((item) => item.id === messageId);
+    const message = messages.find((item) => item.id === messageId);
     return message?.text || "";
   });
 
@@ -809,6 +908,7 @@ function connect() {
         appOrigin: window.location.origin,
       })
     );
+    flushManagerLocalOutbox();
     snapshotRecovery.scheduleSnapshotFallback("manager-open");
     render();
   });

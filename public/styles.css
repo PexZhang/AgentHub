@@ -1646,8 +1646,13 @@ h2 {
 
 .status-queued,
 .status-sent,
-.status-waiting_reconnect {
+.status-waiting_reconnect,
+.status-pending_local {
   color: #ffd277;
+}
+
+.status-sending_local {
+  color: #86ddff;
 }
 
 .status-answered {

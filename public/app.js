@@ -1,5 +1,15 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
+import {
+  LOCAL_OUTBOX_MAX_MESSAGES,
+  LOCAL_PENDING_STATUS,
+  LOCAL_SENDING_STATUS,
+  countActiveLocalOutboxMessages,
+  createLocalOutboxMessage,
+  expireLocalOutboxMessages,
+  flushLocalOutboxMessages,
+  mergeServerAndLocalMessages,
+} from "./message-outbox.js";
 
 const UI_PREFS_KEY = "agenthub-ui-prefs-v3";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
@@ -71,6 +81,8 @@ const state = {
       recentTaskCount: 0,
     },
   },
+  localManagerOutbox: [],
+  localDirectOutbox: [],
   activeDeviceId: null,
   activeAgentId: null,
   activeConversationId: null,
@@ -160,6 +172,8 @@ const STATUS_LABELS = {
   sent: "已发送",
   processing: "处理中",
   waiting_reconnect: "等待重连",
+  [LOCAL_PENDING_STATUS]: "待重连",
+  [LOCAL_SENDING_STATUS]: "补发中",
   answered: "已完成",
   failed: "失败",
 };
@@ -244,14 +258,201 @@ function updateSendButtonState() {
     return;
   }
 
-  sendButton.disabled = !state.connected || !state.activeAgentId || !messageInput?.value.trim();
+  const queueFull =
+    !state.connected &&
+    countActiveLocalOutboxMessages(state.localDirectOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES;
+  sendButton.disabled =
+    state.auth.blocked || !state.activeAgentId || !messageInput?.value.trim() || queueFull;
+}
+
+function updateManagerSendButtonState() {
+  if (!managerSendButton) {
+    return;
+  }
+
+  const queueFull =
+    !state.connected &&
+    countActiveLocalOutboxMessages(state.localManagerOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES;
+  managerSendButton.disabled = state.auth.blocked || !managerInput?.value.trim() || queueFull;
+}
+
+function reconcileManagerLocalOutbox() {
+  const expired = expireLocalOutboxMessages(state.localManagerOutbox);
+  if (expired.changed) {
+    state.localManagerOutbox = expired.messages;
+  }
+
+  const merged = mergeServerAndLocalMessages(
+    state.manager.messages || [],
+    state.localManagerOutbox
+  );
+  if (merged.changed) {
+    state.localManagerOutbox = merged.localMessages;
+  }
+
+  return merged.messages;
+}
+
+function enqueueLocalManagerMessage(text) {
+  const trimmedText = String(text || "").trim();
+  if (!trimmedText) {
+    return false;
+  }
+
+  if (countActiveLocalOutboxMessages(state.localManagerOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES) {
+    state.localManagerOutbox = [
+      ...state.localManagerOutbox,
+      createLocalOutboxMessage({
+        kind: "manager",
+        text: trimmedText,
+        status: "failed",
+        errorMessage: `离线待发上限为 ${LOCAL_OUTBOX_MAX_MESSAGES} 条，这条消息没有进入自动补发队列。`,
+      }),
+    ];
+    return false;
+  }
+
+  state.localManagerOutbox = [
+    ...state.localManagerOutbox,
+    createLocalOutboxMessage({
+      kind: "manager",
+      text: trimmedText,
+    }),
+  ];
+  return true;
+}
+
+function flushManagerLocalOutbox() {
+  const expired = expireLocalOutboxMessages(state.localManagerOutbox);
+  if (expired.changed) {
+    state.localManagerOutbox = expired.messages;
+  }
+
+  const flushed = flushLocalOutboxMessages(state.localManagerOutbox, {
+    send(message) {
+      return sendAction({
+        type: "manager_message",
+        text: message.text,
+        clientMessageId: message.clientMessageId,
+      });
+    },
+  });
+
+  if (flushed.changed) {
+    state.localManagerOutbox = flushed.messages;
+  }
+}
+
+function isRelevantDirectOutboxMessage(message, conversationId, agentId) {
+  if (message?.kind !== "direct") {
+    return false;
+  }
+
+  if (conversationId) {
+    return message.conversationId === conversationId;
+  }
+
+  return !message.conversationId && message.agentId === agentId;
+}
+
+function getRenderableDirectMessages(conversation, agent) {
+  const expired = expireLocalOutboxMessages(state.localDirectOutbox);
+  if (expired.changed) {
+    state.localDirectOutbox = expired.messages;
+  }
+
+  const conversationId = conversation?.id || null;
+  const deliveredIds = new Set(
+    (conversation?.messages || [])
+      .map((message) => String(message?.clientMessageId || "").trim())
+      .filter(Boolean)
+  );
+
+  if (deliveredIds.size > 0) {
+    const nextOutbox = state.localDirectOutbox.filter(
+      (message) => !deliveredIds.has(String(message?.clientMessageId || "").trim())
+    );
+    if (nextOutbox.length !== state.localDirectOutbox.length) {
+      state.localDirectOutbox = nextOutbox;
+    }
+  }
+
+  const localMessages = state.localDirectOutbox.filter((message) =>
+    isRelevantDirectOutboxMessage(message, conversationId, agent?.id || null)
+  );
+  return mergeServerAndLocalMessages(conversation?.messages || [], localMessages).messages;
+}
+
+function enqueueLocalDirectMessage(text) {
+  const trimmedText = String(text || "").trim();
+  if (!trimmedText || !state.activeAgentId) {
+    return false;
+  }
+
+  if (countActiveLocalOutboxMessages(state.localDirectOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES) {
+    state.localDirectOutbox = [
+      ...state.localDirectOutbox,
+      createLocalOutboxMessage({
+        kind: "direct",
+        text: trimmedText,
+        agentId: state.activeAgentId,
+        conversationId: state.activeConversationId,
+        status: "failed",
+        errorMessage: `离线待发上限为 ${LOCAL_OUTBOX_MAX_MESSAGES} 条，这条消息没有进入自动补发队列。`,
+      }),
+    ];
+    return false;
+  }
+
+  state.localDirectOutbox = [
+    ...state.localDirectOutbox,
+    createLocalOutboxMessage({
+      kind: "direct",
+      text: trimmedText,
+      agentId: state.activeAgentId,
+      conversationId: state.activeConversationId,
+    }),
+  ];
+  return true;
+}
+
+function flushDirectLocalOutbox() {
+  const expired = expireLocalOutboxMessages(state.localDirectOutbox);
+  if (expired.changed) {
+    state.localDirectOutbox = expired.messages;
+  }
+
+  const flushed = flushLocalOutboxMessages(state.localDirectOutbox, {
+    send(message) {
+      return sendAction({
+        type: "user_message",
+        agentId: message.agentId,
+        conversationId: message.conversationId,
+        text: message.text,
+        clientMessageId: message.clientMessageId,
+      });
+    },
+  });
+
+  if (flushed.changed) {
+    state.localDirectOutbox = flushed.messages;
+  }
 }
 
 function submitDirectMessage() {
   const text = messageInput?.value.trim();
-  if (!text || !state.activeAgentId || !state.socket || state.socket.readyState !== 1) {
+  if (!text || !state.activeAgentId) {
     updateSendButtonState();
     return false;
+  }
+
+  if (!state.socket || state.socket.readyState !== 1) {
+    const queued = enqueueLocalDirectMessage(text);
+    messageInput.value = "";
+    state.messageViewport.stickToBottom = true;
+    renderMessages();
+    updateSendButtonState();
+    return queued;
   }
 
   sendAction({
@@ -1008,14 +1209,15 @@ function renderManagerPanel() {
   });
 
   const messages = state.manager.messages || [];
-  if (messages.length === 0) {
+  const renderableMessages = reconcileManagerLocalOutbox();
+  if (renderableMessages.length === 0) {
     managerMessagesNode.innerHTML = `
       <div class="empty-card manager-empty-card">
         先直接问我，例如“现在我的员工有哪些”“他们现在在做什么”“帮我切到和 Codex Main 的对话”。
       </div>
     `;
   } else {
-    managerMessagesNode.innerHTML = messages
+    managerMessagesNode.innerHTML = renderableMessages
       .map((message) => {
         const roleClass = message.role === "assistant" ? "assistant" : "user";
         const statusLabel = message.role === "user" ? getManagerStatusLabel(message) : "";
@@ -1047,7 +1249,7 @@ function renderManagerPanel() {
       })
       .join("");
 
-    const latestPending = [...messages]
+    const latestPending = [...renderableMessages]
       .reverse()
       .find(
         (message) =>
@@ -1085,11 +1287,11 @@ function renderManagerPanel() {
   });
 
   bindCopyMessageButtons(managerMessagesNode, (messageId) => {
-    const message = (state.manager.messages || []).find((item) => item.id === messageId);
+    const message = renderableMessages.find((item) => item.id === messageId);
     return message?.text || "";
   });
 
-  managerSendButton.disabled = !state.connected;
+  updateManagerSendButtonState();
   requestAnimationFrame(() => {
     managerMessagesNode.scrollTo({
       top: managerMessagesNode.scrollHeight,
@@ -1696,7 +1898,9 @@ function renderMessages() {
   renderMessageToolbar(agent, conversation);
   updateSendButtonState();
 
-  if (!conversation || conversation.messages.length === 0) {
+  const renderableMessages = getRenderableDirectMessages(conversation, agent);
+
+  if ((!conversation || conversation.messages.length === 0) && renderableMessages.length === 0) {
     state.messageViewport.lastRenderSignature = buildConversationRenderSignature(
       conversationId,
       [],
@@ -1712,8 +1916,8 @@ function renderMessages() {
     return;
   }
 
-  const hiddenMessageCount = conversation.hiddenMessageCount || 0;
-  const lastMessage = conversation.messages[conversation.messages.length - 1] || null;
+  const hiddenMessageCount = conversation?.hiddenMessageCount || 0;
+  const lastMessage = renderableMessages[renderableMessages.length - 1] || null;
   const lastMessageDisplayStatus = getConversationMessageDisplayStatus(lastMessage, agent);
   const shouldShowTyping =
     lastMessage?.role === "user" &&
@@ -1738,7 +1942,7 @@ function renderMessages() {
 
     messagesNode.innerHTML =
       historyNotice +
-      conversation.messages
+      renderableMessages
       .map((message) => {
       const roleClass = message.role === "assistant" ? "assistant" : "user";
       const displayStatus = getConversationMessageDisplayStatus(message, agent);
@@ -1785,8 +1989,7 @@ function renderMessages() {
   }
 
   bindCopyMessageButtons(messagesNode, (messageId) => {
-    const currentConversation = getActiveConversation();
-    const message = (currentConversation?.messages || []).find((item) => item.id === messageId);
+    const message = renderableMessages.find((item) => item.id === messageId);
     return message?.text || "";
   });
 
@@ -1984,6 +2187,8 @@ function connect() {
         appOrigin: window.location.origin,
       })
     );
+    flushManagerLocalOutbox();
+    flushDirectLocalOutbox();
     snapshotRecovery.scheduleSnapshotFallback("direct-open");
     render();
   });
@@ -2083,7 +2288,16 @@ if (managerComposer && managerInput) {
     event.preventDefault();
 
     const text = managerInput.value.trim();
-    if (!text || !state.socket || state.socket.readyState !== 1) {
+    if (!text) {
+      return;
+    }
+
+    if (!state.socket || state.socket.readyState !== 1) {
+      enqueueLocalManagerMessage(text);
+      managerInput.value = "";
+      updateManagerSendButtonState();
+      renderManager();
+      managerInput.focus();
       return;
     }
 
@@ -2093,6 +2307,7 @@ if (managerComposer && managerInput) {
     });
 
     managerInput.value = "";
+    updateManagerSendButtonState();
     managerInput.focus();
   });
 }
@@ -2113,6 +2328,9 @@ messageInput.addEventListener("blur", () => {
 });
 
 if (managerInput && managerComposer) {
+  managerInput.addEventListener("input", () => {
+    updateManagerSendButtonState();
+  });
   managerInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
