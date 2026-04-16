@@ -260,12 +260,14 @@ function submitAuthToken(rawToken) {
   state.auth.blocked = false;
   persistStoredAppToken(token);
 
-  if (state.socket && state.socket.readyState <= 1) {
-    state.socket.close();
-  } else {
-    connect();
+  const existingSocket = state.socket;
+  state.socket = null;
+  state.connected = false;
+  if (existingSocket && existingSocket.readyState <= 1) {
+    existingSocket.close();
   }
 
+  connect();
   refreshSnapshot();
 }
 
