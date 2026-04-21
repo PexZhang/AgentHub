@@ -30,6 +30,7 @@ import {
 } from "./shared/domain-utils.js";
 import { createStoreFromEnv } from "./store/create-store.js";
 import {
+  buildTaskDescriptor,
   buildTaskStatusLabel,
   compareByRecency,
   formatRelativeMinutes,

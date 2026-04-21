@@ -1,33 +1,35 @@
-<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g transform="translate(128 128) scale(1.32)">
-    <g transform="rotate(-90)">
-      <path
-        d="M-36 112L0 28L36 112"
-        stroke="#3B82FF"
-        stroke-width="24"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </g>
+<svg width="246.153" height="246.153" viewBox="132.923 132.924 246.153 246.153" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(249.575 262.425)">
+    <g transform="rotate(15)">
+      <g transform="rotate(-90)">
+        <path
+          d="M-36 112L0 28L36 112"
+          stroke="#3B82FF"
+          stroke-width="24"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </g>
 
-    <g transform="rotate(30)">
-      <path
-        d="M-36 112L0 28L36 112"
-        stroke="#3B82FF"
-        stroke-width="24"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </g>
+      <g transform="rotate(30)">
+        <path
+          d="M-36 112L0 28L36 112"
+          stroke="#3B82FF"
+          stroke-width="24"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </g>
 
-    <g transform="rotate(150)">
-      <path
-        d="M-36 112L0 28L36 112"
-        stroke="#3B82FF"
-        stroke-width="24"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
+      <g transform="rotate(150)">
+        <path
+          d="M-36 112L0 28L36 112"
+          stroke="#3B82FF"
+          stroke-width="24"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </g>
     </g>
   </g>
 </svg>
