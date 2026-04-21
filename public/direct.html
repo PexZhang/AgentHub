@@ -6,93 +6,89 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
-    <title>AgentHub · 员工直连</title>
+    <title>AgentHub · 员工直聊</title>
+    <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="direct-home">
-    <div class="shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">AgentHub</p>
-          <h1>员工直连台</h1>
-          <p class="muted">这里只在你要亲自指导某位数字员工时进入。</p>
-        </div>
-        <div class="topbar-actions">
-          <a class="nav-pill" href="/">返回 AI经理</a>
-          <a class="nav-pill secondary" href="/commander.html">指挥总览</a>
-          <div class="status-dot-row">
-            <span class="status-dot" id="socket-dot"></span>
-            <span id="socket-text">正在连接</span>
-          </div>
-        </div>
-      </header>
+  <body class="page direct-home page-direct" data-page="direct">
+    <section id="auth-modal" class="auth-entry" hidden>
+      <div id="auth-modal-content" class="auth-entry-content"></div>
+    </section>
 
-      <main class="direct-layout">
-        <section class="panel agents-panel">
-          <div class="panel-title-row">
-            <div>
-              <h2>员工与设备</h2>
-              <p class="muted" id="agents-subtitle">先选设备，再选员工，然后进入对应直连会话。</p>
-            </div>
-            <div class="agents-panel-actions">
-              <span class="muted" id="agent-count">0 online</span>
-              <button type="button" class="session-action-button" id="agents-toggle-button">
-                展开
-              </button>
-            </div>
-          </div>
-          <div id="agents-collapsed-summary" class="section-collapsed-summary" hidden></div>
-          <div id="agents-panel-body" class="agents-panel-body">
-            <div id="device-list" class="device-list"></div>
-            <div id="agent-list" class="agent-list"></div>
-          </div>
-        </section>
-
-        <section class="panel conversation-panel">
-          <div class="panel-title-row">
-            <div>
-              <h2 id="conversation-title">等待直连员工</h2>
-              <p class="muted" id="conversation-subtitle">
-                AI经理 会在需要时把你切到这里，直接和某位数字员工对话。
-              </p>
-            </div>
-          </div>
-
-          <div id="thread-strip" class="thread-strip"></div>
-
-          <div id="message-stage" class="message-stage">
-            <div id="message-toolbar" class="message-toolbar"></div>
-            <div id="messages" class="messages"></div>
-            <button type="button" id="message-jump-button" class="message-jump-button" hidden>
-              回到底部
+    <main class="shell direct-shell" id="direct-shell">
+      <section class="chat-card direct-chat-card">
+        <div class="chat-overlay-top direct-overlay-top" id="direct-overlay-top">
+          <div id="direct-context-collapsed-bar" class="collapsed-hero-bar" hidden>
+            <div id="direct-collapsed-summary" class="collapsed-hero-summary"></div>
+            <button
+              type="button"
+              class="quiet-button"
+              id="direct-context-expand-button"
+            >
+              展开
             </button>
           </div>
 
-          <form id="composer" class="composer">
-            <textarea
-              id="message-input"
-              rows="1"
-              placeholder="输入消息，直接发给当前选中的数字员工"
-            ></textarea>
-            <button type="button" id="send-button">发送</button>
-          </form>
+          <section id="direct-topbar" class="hero-block">
+            <header class="topbar hero-topbar">
+              <div class="hero-copy">
+                <div class="brand-lockup" aria-label="AgentHub">
+                  <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
+                  <span class="brand-wordmark">AgentHub</span>
+                </div>
+                <h1>员工直连台</h1>
+                <p class="muted">
+                  这里只保留你和当前数字员工的直接对话。想回上层时，再返回员工概览或 AI 经理。
+                </p>
+              </div>
+              <div class="topbar-actions">
+                <a class="nav-pill secondary" id="direct-back-link" href="/employee.html">返回员工概览</a>
+                <div class="status-dot-row">
+                  <span class="status-dot" id="socket-dot"></span>
+                  <span id="socket-text">正在连接</span>
+                </div>
+              </div>
+            </header>
+
+            <section id="direct-context-body" class="surface-card intro-card">
+              <div class="panel-title-row">
+                <div>
+                  <p class="section-kicker">Direct</p>
+                  <h2 id="conversation-title">等待直连员工</h2>
+                  <p class="muted" id="conversation-subtitle">
+                    AI 经理会在需要时把你带到这里，和某位数字员工直接沟通。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="quiet-button"
+                  id="direct-context-collapse-button"
+                >
+                  收起
+                </button>
+              </div>
+              <div id="message-toolbar" class="suggestion-pills direct-status-strip"></div>
+            </section>
+          </section>
+        </div>
+
+        <section id="message-stage" class="message-stage chat-stage">
+          <div id="messages" class="messages"></div>
+          <button type="button" id="message-jump-button" class="message-jump-button" hidden>
+            回到底部
+          </button>
         </section>
-      </main>
 
-      <nav id="mobile-nav" class="mobile-nav" hidden></nav>
-    </div>
-
-    <div id="directory-picker-modal" class="directory-modal" hidden>
-      <div id="directory-picker-content" class="directory-modal-content"></div>
-    </div>
-
-    <div id="session-picker-modal" class="session-modal" hidden>
-      <div id="session-picker-content" class="session-modal-content"></div>
-    </div>
-
-    <div id="auth-modal" class="session-modal" hidden>
-      <div id="auth-modal-content" class="session-modal-content"></div>
-    </div>
+        <form id="composer" class="composer floating-composer chat-composer">
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="发送消息，直接下达要求或追问当前进展"
+          ></textarea>
+          <button type="button" id="send-button">发送</button>
+        </form>
+      </section>
+    </main>
 
     <script type="module" src="/app.js"></script>
   </body>

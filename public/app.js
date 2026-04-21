@@ -1,6 +1,11 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
 import {
+  applyConversationOverlayCollapsedState,
+  bindConversationShellResizeTracking,
+  syncConversationShellOffsets,
+} from "./conversation-shell.js";
+import {
   LOCAL_OUTBOX_MAX_MESSAGES,
   LOCAL_PENDING_STATUS,
   LOCAL_SENDING_STATUS,
@@ -14,11 +19,13 @@ import {
 const UI_PREFS_KEY = "agenthub-ui-prefs-v3";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
 const launchParams = new URLSearchParams(window.location.search);
+const pageMode = document.body.dataset.page || "direct";
 
 function buildDefaultUiState() {
   return {
     agentsCollapsed: true,
     threadsCollapsed: true,
+    directContextCollapsed: true,
     mobileView: "devices",
   };
 }
@@ -132,6 +139,8 @@ const state = {
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
 const shellNode = document.querySelector(".shell");
+const appShell =
+  document.querySelector("#direct-shell") || document.querySelector("#employee-shell");
 const agentsPanel = document.querySelector(".agents-panel");
 const agentsSubtitle = document.querySelector("#agents-subtitle");
 const agentsToggleButton = document.querySelector("#agents-toggle-button");
@@ -151,7 +160,14 @@ const deviceList = document.querySelector("#device-list");
 const agentList = document.querySelector("#agent-list");
 const conversationTitle = document.querySelector("#conversation-title");
 const conversationSubtitle = document.querySelector("#conversation-subtitle");
+const directTopbar = document.querySelector("#direct-topbar");
+const directContextBody = document.querySelector("#direct-context-body");
+const directCollapsedBar = document.querySelector("#direct-context-collapsed-bar");
+const directContextExpandButton = document.querySelector("#direct-context-expand-button");
+const directContextCollapseButton = document.querySelector("#direct-context-collapse-button");
+const directCollapsedSummary = document.querySelector("#direct-collapsed-summary");
 const threadStrip = document.querySelector("#thread-strip");
+const directOverlayTop = document.querySelector("#direct-overlay-top");
 const messageStage = document.querySelector("#message-stage");
 const messageToolbar = document.querySelector("#message-toolbar");
 const messagesNode = document.querySelector("#messages");
@@ -159,6 +175,7 @@ const messageJumpButton = document.querySelector("#message-jump-button");
 const composer = document.querySelector("#composer");
 const messageInput = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
+const directBackLink = document.querySelector("#direct-back-link");
 const directoryPickerModal = document.querySelector("#directory-picker-modal");
 const directoryPickerContent = document.querySelector("#directory-picker-content");
 const sessionPickerModal = document.querySelector("#session-picker-modal");
@@ -166,6 +183,52 @@ const sessionPickerContent = document.querySelector("#session-picker-content");
 const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
 const mobileNav = document.querySelector("#mobile-nav");
+const employeeTitle = document.querySelector("#employee-title");
+const employeeSubtitle = document.querySelector("#employee-subtitle");
+const employeeStatusCopy = document.querySelector("#employee-status-copy");
+const employeeTaskCopy = document.querySelector("#employee-task-copy");
+const employeeContextPills = document.querySelector("#employee-context-pills");
+const employeeThreadEntry = document.querySelector("#employee-thread-entry");
+const employeeThreadCopy = document.querySelector("#employee-thread-copy");
+const employeeSessionEntry = document.querySelector("#employee-session-entry");
+const employeeSessionCopy = document.querySelector("#employee-session-copy");
+const employeeWorkdirEntry = document.querySelector("#employee-workdir-entry");
+const employeeWorkdirCopy = document.querySelector("#employee-workdir-copy");
+const employeeEnterChat = document.querySelector("#employee-enter-chat");
+let directOverlayResizeBound = false;
+
+function syncDirectComposerHeight() {
+  if (!messageInput) {
+    return;
+  }
+
+  messageInput.style.height = "auto";
+  messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
+  syncDirectOverlayOffsets();
+}
+
+function syncDirectOverlayOffsets() {
+  syncConversationShellOffsets({
+    stageNode: messageStage,
+    overlayNode: directOverlayTop,
+    composerNode: composer,
+  });
+}
+
+function bindDirectOverlayResizeTracking() {
+  if (directOverlayResizeBound || !messageStage) {
+    return;
+  }
+
+  directOverlayResizeBound = true;
+
+  bindConversationShellResizeTracking({
+    stageNode: messageStage,
+    overlayNode: directOverlayTop,
+    composerNode: composer,
+    onSync: syncDirectOverlayOffsets,
+  });
+}
 
 const STATUS_LABELS = {
   queued: "排队中",
@@ -449,6 +512,7 @@ function submitDirectMessage() {
   if (!state.socket || state.socket.readyState !== 1) {
     const queued = enqueueLocalDirectMessage(text);
     messageInput.value = "";
+    syncDirectComposerHeight();
     state.messageViewport.stickToBottom = true;
     renderMessages();
     updateSendButtonState();
@@ -463,6 +527,7 @@ function submitDirectMessage() {
   });
 
   messageInput.value = "";
+  syncDirectComposerHeight();
 
   if (isMobileLayout()) {
     messageInput.blur();
@@ -1055,7 +1120,7 @@ function openDirectConversation(action) {
   }
   render();
   requestAnimationFrame(() => {
-    document.querySelector(".conversation-panel")?.scrollIntoView({
+    (messageStage || document.querySelector(".conversation-panel"))?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
@@ -1068,7 +1133,18 @@ function openManagerAction(action) {
   }
 
   if (action.type === "switch_direct") {
-    openDirectConversation(action);
+    const params = new URLSearchParams();
+    params.set("agentId", action.agentId || "");
+    if (action.conversationId) {
+      params.set("conversationId", action.conversationId);
+    }
+    if (action.agentName) {
+      params.set("agentName", action.agentName);
+    }
+    if (action.deviceName) {
+      params.set("deviceName", action.deviceName);
+    }
+    window.location.href = `/employee.html?${params.toString()}`;
     return;
   }
 
@@ -1148,7 +1224,7 @@ function applyLaunchTarget() {
     state.activeConversationId = state.launchTarget.conversationId;
   }
 
-  if (isMobileLayout()) {
+  if (isMobileLayout() && pageMode !== "employee") {
     setMobileView("chat", { skipPersist: true });
   }
 }
@@ -1301,6 +1377,10 @@ function renderManagerPanel() {
 }
 
 function renderDevices() {
+  if (!deviceList) {
+    return;
+  }
+
   const devices = state.devices.length > 0 ? state.devices : deriveDevicesFromAgents(state.agents);
 
   if (devices.length === 0) {
@@ -1389,6 +1469,10 @@ function renderAgentsPanelSummary() {
 }
 
 function renderAgents() {
+  if (!agentCount || !agentList) {
+    return;
+  }
+
   const visibleAgents = getAgentsForDevice(state.activeDeviceId);
   const onlineAgentCount = state.agents.filter((agent) => agent.online).length;
   agentCount.textContent = `${state.devices.length || deriveDevicesFromAgents(state.agents).length} 台设备 · ${onlineAgentCount} 个在线数字员工`;
@@ -1440,6 +1524,10 @@ function renderAgents() {
 }
 
 function renderThreadStrip(agent) {
+  if (!threadStrip) {
+    return;
+  }
+
   if (!agent) {
     threadStrip.innerHTML = "";
     return;
@@ -1579,6 +1667,10 @@ function renderThreadStrip(agent) {
 }
 
 function renderMobileNav() {
+  if (!mobileNav || !shellNode) {
+    return;
+  }
+
   if (!isMobileLayout()) {
     mobileNav.hidden = true;
     mobileNav.innerHTML = "";
@@ -1644,6 +1736,10 @@ function renderMobileNav() {
 }
 
 function renderSessionPicker() {
+  if (!sessionPickerModal || !sessionPickerContent) {
+    return;
+  }
+
   if (!state.sessionPicker.open) {
     sessionPickerModal.hidden = true;
     sessionPickerContent.innerHTML = "";
@@ -1714,30 +1810,39 @@ function renderSessionPicker() {
 }
 
 function renderMessageToolbar(agent, conversation) {
+  if (!messageToolbar) {
+    return;
+  }
+
   const messageCount = conversation?.messages?.length || 0;
   const lastMessage = getLastMessage(conversation);
-  const statusText = state.messageViewport.showJumpButton
-    ? "正在查看历史消息"
-    : "跟随最新消息";
+  const deviceName = (agent && (agent.deviceName || getDevice(agent.deviceId)?.name)) || "未选择";
+  const statusText = state.messageViewport.showJumpButton ? "正在查看历史消息" : "跟随最新消息";
   const pills = [
-    `设备 ${(agent && (agent.deviceName || getDevice(agent.deviceId)?.name)) || "未选择"}`,
-    `运行时 ${getRuntimeLabel(agent)}`,
-    `消息 ${messageCount} 条`,
+    `设备 ${deviceName}`,
+    conversation?.title || "新会话",
     lastMessage ? `最近更新 ${formatUpdatedAt(lastMessage.createdAt)}` : "等待第一条消息",
-    statusText,
   ];
   const hasCodexContext = agentUsesCodex(agent);
 
   if (hasCodexContext) {
-    pills.splice(1, 0, `目录 ${conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "未设置"}`);
     pills.splice(
       2,
+      0,
+      `目录 ${conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "未设置"}`
+    );
+    pills.splice(
+      3,
       0,
       conversation?.codexSessionId
         ? `会话 ${shortenId(conversation.codexSessionId)}`
         : "首次回复后创建会话"
     );
+  } else {
+    pills.splice(2, 0, `运行时 ${getRuntimeLabel(agent)}`);
   }
+
+  pills.push(statusText);
 
   messageToolbar.innerHTML = `
     ${pills
@@ -1746,7 +1851,48 @@ function renderMessageToolbar(agent, conversation) {
   `;
 }
 
+function buildDirectCollapsedSummary(agent, conversation, activeTask) {
+  if (!agent) {
+    return "展开后查看当前直连员工、设备和线程状态。";
+  }
+
+  const deviceName =
+    agent.deviceName || conversation?.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
+  const parts = [agent.name, `设备 ${deviceName}`, agent.online ? "在线" : "离线"];
+
+  if (conversation?.title) {
+    parts.push(`线程 ${conversation.title}`);
+  } else {
+    parts.push("等待线程");
+  }
+
+  if (conversation?.messages?.length) {
+    parts.push(`${conversation.messages.length} 条消息`);
+  }
+
+  if (activeTask?.title) {
+    parts.push(`任务 ${activeTask.title}`);
+  }
+
+  return parts.join(" · ");
+}
+
+function renderDirectContextPanel(agent, conversation, activeTask) {
+  applyConversationOverlayCollapsedState({
+    overlayNode: directOverlayTop,
+    expandedNodes: [directTopbar, directContextBody],
+    collapsedBarNode: directCollapsedBar,
+    collapsedSummaryNode: directCollapsedSummary,
+    collapsed: state.ui.directContextCollapsed,
+    summaryText: buildDirectCollapsedSummary(agent, conversation, activeTask),
+  });
+}
+
 function renderAuthPrompt() {
+  if (appShell) {
+    appShell.hidden = state.auth.promptOpen;
+  }
+
   if (!state.auth.promptOpen) {
     authModal.hidden = true;
     authModalContent.innerHTML = "";
@@ -1755,11 +1901,15 @@ function renderAuthPrompt() {
 
   authModal.hidden = false;
   authModalContent.innerHTML = `
-    <div class="session-modal-card auth-modal-card">
-      <div class="session-modal-head">
+    <div class="auth-entry-card">
+      <div class="hero-copy compact">
+        <div class="brand-lockup" aria-label="AgentHub">
+          <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
+          <span class="brand-wordmark">AgentHub</span>
+        </div>
         <div>
-          <h3>输入访问令牌</h3>
-          <p class="muted">这个公网 AgentHub 受保护。输入 App Token 后，手机端才能查看会话并给数字员工发消息。</p>
+          <h3>连接你的控制平面</h3>
+          <p class="muted">输入访问令牌后，再加载员工状态、工作目录和直连聊天。</p>
         </div>
       </div>
 
@@ -1780,7 +1930,7 @@ function renderAuthPrompt() {
           : ""
       }
 
-      <div class="directory-modal-foot auth-modal-foot">
+      <div class="auth-entry-foot">
         <button type="button" class="directory-secondary-button" id="auth-clear-button">
           清空本地令牌
         </button>
@@ -1816,6 +1966,10 @@ function renderAuthPrompt() {
 }
 
 function syncMessageViewportState() {
+  if (!messagesNode || !messageStage || !messageJumpButton) {
+    return;
+  }
+
   const threshold = 36;
   const distanceToBottom =
     messagesNode.scrollHeight - messagesNode.scrollTop - messagesNode.clientHeight;
@@ -1831,6 +1985,10 @@ function syncMessageViewportState() {
 }
 
 function scrollMessagesToBottom(behavior = "smooth") {
+  if (!messagesNode) {
+    return;
+  }
+
   messagesNode.scrollTo({
     top: messagesNode.scrollHeight,
     behavior,
@@ -1856,18 +2014,24 @@ function buildConversationRenderSignature(conversationId, messages, hiddenMessag
 }
 
 function renderMessages() {
+  if (!conversationTitle || !conversationSubtitle || !messagesNode || !sendButton) {
+    return;
+  }
+
   const agent = getAgent(state.activeAgentId);
   const conversation = getActiveConversation();
+  const serverMessages = conversation?.messages || [];
   const conversationId = conversation?.id || null;
-  const currentMessageCount = conversation?.messages?.length || 0;
+  const currentMessageCount = serverMessages.length;
   const conversationChanged = state.messageViewport.lastConversationId !== conversationId;
   const shouldAutoStick = conversationChanged || state.messageViewport.stickToBottom;
 
   if (!state.activeAgentId || !agent) {
     conversationTitle.textContent = "等待直连员工";
-    conversationSubtitle.textContent = "AI经理 会在需要时把你切到这里，直接和某位数字员工对话。";
+    conversationSubtitle.textContent = "从员工概览页进入后，你可以在这里和某位数字员工直接沟通。";
     renderThreadStrip(null);
     renderMessageToolbar(null, null);
+    renderDirectContextPanel(null, null, null);
     messagesNode.innerHTML =
       '<div class="empty-card">当前没有可用的数字员工。</div>';
     sendButton.disabled = true;
@@ -1878,29 +2042,42 @@ function renderMessages() {
 
   const deviceName =
     agent.deviceName || conversation?.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
-  const mobileThreadsView = isMobileLayout() && state.ui.mobileView === "threads";
+  const activeTask = getActiveTaskForAgent(agent.id);
 
-  conversationTitle.textContent = mobileThreadsView ? agent.name : conversation?.title || agent.name;
-
-  if (mobileThreadsView) {
-    conversationSubtitle.textContent = `设备 ${deviceName} · ${getConversationsForAgent(agent.id).length} 个线程 · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
-  } else if (!agent.online) {
-    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递`;
+  conversationTitle.textContent = agent.name;
+  if (!agent.online) {
+    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递。`;
+  } else if (activeTask?.title) {
+    conversationSubtitle.textContent = `当前任务：${activeTask.title}${conversation?.title ? ` · 线程 ${conversation.title}` : ""}`;
+  } else if (conversation?.title) {
+    conversationSubtitle.textContent = `设备 ${deviceName} · 当前线程 ${conversation.title}`;
   } else {
-    const directPrefix =
-      state.directFocus?.agentId === agent.id
-        ? `当前直连 ${state.directFocus.agentName || agent.name} · `
-        : "";
-    conversationSubtitle.textContent = `${directPrefix}设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+  }
+
+  if (directBackLink) {
+    const params = new URLSearchParams();
+    params.set("agentId", agent.id);
+    if (conversation?.id) {
+      params.set("conversationId", conversation.id);
+    }
+    if (agent.name) {
+      params.set("agentName", agent.name);
+    }
+    if (deviceName) {
+      params.set("deviceName", deviceName);
+    }
+    directBackLink.href = `/employee.html?${params.toString()}`;
   }
 
   renderThreadStrip(agent);
   renderMessageToolbar(agent, conversation);
+  renderDirectContextPanel(agent, conversation, activeTask);
   updateSendButtonState();
 
   const renderableMessages = getRenderableDirectMessages(conversation, agent);
 
-  if ((!conversation || conversation.messages.length === 0) && renderableMessages.length === 0) {
+  if (serverMessages.length === 0 && renderableMessages.length === 0) {
     state.messageViewport.lastRenderSignature = buildConversationRenderSignature(
       conversationId,
       [],
@@ -1925,7 +2102,7 @@ function renderMessages() {
     ["queued", "sent", "processing"].includes(lastMessageDisplayStatus);
   const renderSignature = buildConversationRenderSignature(
     conversationId,
-    conversation.messages,
+    renderableMessages,
     hiddenMessageCount,
     shouldShowTyping
   );
@@ -1935,7 +2112,7 @@ function renderMessages() {
       hiddenMessageCount > 0
         ? `
           <div class="message-history-note">
-            为保持页面流畅，这里只显示最近 ${conversation.messages.length} 条直连消息，已折叠更早的 ${hiddenMessageCount} 条。
+            为保持页面流畅，这里只显示最近 ${renderableMessages.length} 条直连消息，已折叠更早的 ${hiddenMessageCount} 条。
           </div>
         `
         : "";
@@ -2004,7 +2181,146 @@ function renderMessages() {
   state.messageViewport.lastMessageCount = currentMessageCount;
 }
 
+function getActiveTaskForAgent(agentId) {
+  return (
+    state.tasks
+      .filter((task) => task.agentId === agentId)
+      .sort((left, right) => {
+        if (Boolean(left.active) !== Boolean(right.active)) {
+          return left.active ? -1 : 1;
+        }
+
+        return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
+      })[0] || null
+  );
+}
+
+function buildEmployeeDirectHref(agent, conversation = null) {
+  if (!agent?.id) {
+    return "/direct.html";
+  }
+
+  const params = new URLSearchParams();
+  params.set("agentId", agent.id);
+  if (conversation?.id) {
+    params.set("conversationId", conversation.id);
+  }
+  if (agent.name) {
+    params.set("agentName", agent.name);
+  }
+  if (agent.deviceName) {
+    params.set("deviceName", agent.deviceName);
+  }
+  return `/direct.html?${params.toString()}`;
+}
+
+function renderEmployeeOverview() {
+  if (
+    !employeeTitle ||
+    !employeeSubtitle ||
+    !employeeStatusCopy ||
+    !employeeTaskCopy ||
+    !employeeContextPills ||
+    !employeeThreadEntry ||
+    !employeeThreadCopy ||
+    !employeeSessionEntry ||
+    !employeeSessionCopy ||
+    !employeeWorkdirEntry ||
+    !employeeWorkdirCopy ||
+    !employeeEnterChat
+  ) {
+    return;
+  }
+
+  const agent = getAgent(state.activeAgentId);
+  const conversation = getActiveConversation();
+
+  if (!agent) {
+    employeeTitle.textContent = "还没有可用员工";
+    employeeSubtitle.textContent = "等数字员工连上来后，这里会显示状态、线程和工作目录。";
+    employeeStatusCopy.textContent = "当前还没有数字员工接入。";
+    employeeTaskCopy.textContent = "先运行本地 agent，再通过 AI 经理给出跳转卡片。";
+    employeeContextPills.innerHTML = "";
+    employeeThreadCopy.textContent = "没有可用线程。";
+    employeeSessionCopy.textContent = "连上 Codex 员工后，这里会显示可导入的旧 session。";
+    employeeWorkdirCopy.textContent = "连上员工后，再选择工作目录。";
+    employeeSessionEntry.disabled = true;
+    employeeWorkdirEntry.disabled = true;
+    employeeThreadEntry.disabled = true;
+    employeeThreadEntry.onclick = null;
+    employeeSessionEntry.onclick = null;
+    employeeWorkdirEntry.onclick = null;
+    employeeEnterChat.href = "/direct.html";
+    employeeEnterChat.setAttribute("aria-disabled", "true");
+    return;
+  }
+
+  const activeTask = getActiveTaskForAgent(agent.id);
+  const deviceName = agent.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
+  const isCodex = agentUsesCodex(agent);
+  const workdir = conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "未设置工作目录";
+  const recentConversation = conversation || getConversationsForAgent(agent.id)[0] || null;
+
+  employeeTitle.textContent = agent.name;
+  employeeSubtitle.textContent = isCodex
+    ? "线程、旧 session、目录选择都轻轻放着；你只在需要时再进入聊天。"
+    : "先看当前任务和最近线程，再决定是否要亲自进入聊天。";
+  employeeStatusCopy.textContent = `${deviceName} · ${agent.online ? "在线" : "离线"} · 运行时 ${getRuntimeLabel(agent)}`;
+  employeeTaskCopy.textContent = activeTask?.title
+    ? `${activeTask.title} · ${activeTask.progressSummary || activeTask.statusLabel || "正在推进"}`
+    : agent.lastSummary || "当前没有进行中的任务，处于待命状态。";
+  employeeContextPills.innerHTML = [
+    `设备 ${deviceName}`,
+    `运行时 ${getRuntimeLabel(agent)}`,
+    recentConversation?.updatedAt
+      ? `最近更新 ${formatUpdatedAt(recentConversation.updatedAt)}`
+      : "还没有会话",
+  ]
+    .map((item) => `<span class="pill">${escapeHtml(item)}</span>`)
+    .join("");
+
+  employeeThreadCopy.textContent = recentConversation?.title
+    ? `${recentConversation.title} · ${recentConversation.updatedAt ? formatUpdatedAt(recentConversation.updatedAt) : "最近使用"}`
+    : "还没有会话，进入聊天后会自动创建。";
+  employeeSessionCopy.textContent = isCodex
+    ? agent.recentCodexSessions?.length
+      ? `已有 ${agent.recentCodexSessions.length} 个 Codex 历史 session 可导入`
+      : "当前还没有可导入的旧 session"
+    : "当前员工不是 Codex 运行时，无需导入旧 session。";
+  employeeWorkdirCopy.textContent = isCodex
+    ? workdir
+    : "当前员工不是 Codex 运行时，不需要选择工作目录。";
+
+  employeeThreadEntry.disabled = false;
+  employeeSessionEntry.disabled = !isCodex;
+  employeeWorkdirEntry.disabled = !isCodex || !agent.online;
+  employeeEnterChat.href = buildEmployeeDirectHref(agent, recentConversation);
+  employeeEnterChat.removeAttribute("aria-disabled");
+
+  employeeThreadEntry.onclick = () => {
+    window.location.href = buildEmployeeDirectHref(agent, recentConversation);
+  };
+
+  employeeSessionEntry.onclick = () => {
+    if (!isCodex) {
+      return;
+    }
+    openSessionPicker(agent.id);
+  };
+
+  employeeWorkdirEntry.onclick = () => {
+    if (!isCodex || !agent.online) {
+      return;
+    }
+    openDirectoryPicker(agent, workdir === "未设置工作目录" ? "" : workdir);
+  };
+}
+
 function renderDirectoryPicker() {
+  if (!directoryPickerModal || !directoryPickerContent) {
+    return;
+  }
+
   const picker = state.directoryPicker;
   if (!picker.open) {
     directoryPickerModal.hidden = true;
@@ -2153,15 +2469,18 @@ function renderConnection() {
 function render() {
   ensureActiveSelection();
   applyLaunchTarget();
-  ensureMobileView();
   renderConnection();
-  renderManagerPanel();
-  renderMobileNav();
-  renderAgents();
-  renderMessages();
-  renderDirectoryPicker();
-  renderSessionPicker();
   renderAuthPrompt();
+
+  if (pageMode === "employee") {
+    renderEmployeeOverview();
+    renderDirectoryPicker();
+    renderSessionPicker();
+    return;
+  }
+
+  renderMessages();
+  requestAnimationFrame(syncDirectOverlayOffsets);
 }
 
 function connect() {
@@ -2273,7 +2592,7 @@ agentsToggleButton?.addEventListener("click", () => {
   renderAgentsPanelSummary();
 });
 
-composer.addEventListener("submit", (event) => {
+composer?.addEventListener("submit", (event) => {
   event.preventDefault();
   submitDirectMessage();
 });
@@ -2296,7 +2615,7 @@ if (managerComposer && managerInput) {
       enqueueLocalManagerMessage(text);
       managerInput.value = "";
       updateManagerSendButtonState();
-      renderManager();
+      render();
       managerInput.focus();
       return;
     }
@@ -2312,18 +2631,19 @@ if (managerComposer && managerInput) {
   });
 }
 
-messageInput.addEventListener("keydown", (event) => {
+messageInput?.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     submitDirectMessage();
   }
 });
-messageInput.addEventListener("input", updateSendButtonState);
-messageInput.addEventListener("focus", () => {
+messageInput?.addEventListener("input", updateSendButtonState);
+messageInput?.addEventListener("input", syncDirectComposerHeight);
+messageInput?.addEventListener("focus", () => {
   syncKeyboardMode();
   setTimeout(syncKeyboardMode, 80);
 });
-messageInput.addEventListener("blur", () => {
+messageInput?.addEventListener("blur", () => {
   setTimeout(syncKeyboardMode, 120);
 });
 
@@ -2339,31 +2659,46 @@ if (managerInput && managerComposer) {
   });
 }
 
-directoryPickerModal.addEventListener("click", (event) => {
+directoryPickerModal?.addEventListener("click", (event) => {
   if (event.target === directoryPickerModal) {
     closeDirectoryPicker();
   }
 });
 
-sessionPickerModal.addEventListener("click", (event) => {
+sessionPickerModal?.addEventListener("click", (event) => {
   if (event.target === sessionPickerModal) {
     closeSessionPicker();
   }
 });
 
-messagesNode.addEventListener("scroll", () => {
+messagesNode?.addEventListener("scroll", () => {
   syncMessageViewportState();
 });
 
-messageJumpButton.addEventListener("click", () => {
+messageJumpButton?.addEventListener("click", () => {
   scrollMessagesToBottom();
+});
+
+directContextExpandButton?.addEventListener("click", () => {
+  state.ui.directContextCollapsed = false;
+  persistUiState();
+  render();
+});
+
+directContextCollapseButton?.addEventListener("click", () => {
+  state.ui.directContextCollapsed = true;
+  persistUiState();
+  render();
 });
 
 updateViewportHeight();
 updateSendButtonState();
+syncDirectComposerHeight();
+bindDirectOverlayResizeTracking();
 function handleViewportChange() {
   updateViewportHeight();
   syncKeyboardMode();
+  syncDirectOverlayOffsets();
 }
 
 window.addEventListener("resize", handleViewportChange);
@@ -2374,3 +2709,4 @@ syncKeyboardMode();
 
 connect();
 refreshSnapshot();
+render();

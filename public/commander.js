@@ -19,6 +19,7 @@ const state = {
 
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
+const commanderShell = document.querySelector("#commander-shell");
 const commanderGeneratedAt = document.querySelector("#commander-generated-at");
 const commanderSummary = document.querySelector("#commander-summary");
 const commanderAttention = document.querySelector("#commander-attention");
@@ -541,6 +542,10 @@ function renderEmployees(snapshot) {
 }
 
 function renderAuthPrompt() {
+  if (commanderShell) {
+    commanderShell.hidden = state.auth.promptOpen;
+  }
+
   if (!state.auth.promptOpen) {
     authModal.hidden = true;
     authModalContent.innerHTML = "";
@@ -549,11 +554,15 @@ function renderAuthPrompt() {
 
   authModal.hidden = false;
   authModalContent.innerHTML = `
-    <div class="session-modal-card auth-modal-card">
-      <div class="session-modal-head">
+    <div class="auth-entry-card">
+      <div class="hero-copy compact">
+        <div class="brand-lockup" aria-label="AgentHub">
+          <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
+          <span class="brand-wordmark">AgentHub</span>
+        </div>
         <div>
-          <h3>输入访问令牌</h3>
-          <p class="muted">指挥总览也需要 App Token，确认后我再继续同步员工与任务状态。</p>
+          <h3>连接指挥总览</h3>
+          <p class="muted">输入访问令牌后，再同步员工态势、阻塞任务和待审批事项。</p>
         </div>
       </div>
 
@@ -574,7 +583,7 @@ function renderAuthPrompt() {
           : ""
       }
 
-      <div class="directory-modal-foot auth-modal-foot">
+      <div class="auth-entry-foot">
         <button type="button" class="directory-secondary-button" id="auth-clear-button">
           清空本地令牌
         </button>

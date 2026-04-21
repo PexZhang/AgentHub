@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <title>AgentHub · 审批确认</title>
+    <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page page-approval" data-page="approval">
+    <section id="auth-modal" class="auth-entry" hidden>
+      <div id="auth-modal-content" class="auth-entry-content"></div>
+    </section>
+
+    <main class="shell approval-shell" id="approval-shell">
+      <header class="topbar compact-topbar">
+        <div class="topbar-actions">
+          <a class="nav-pill secondary" id="approval-back-link" href="/task.html">返回任务</a>
+        </div>
+        <div class="status-dot-row">
+          <span class="status-dot" id="socket-dot"></span>
+          <span id="socket-text">正在连接</span>
+        </div>
+      </header>
+
+      <section class="surface-card hero-card approval-hero">
+        <div class="hero-copy compact">
+          <p class="section-kicker">Approval</p>
+          <h1 id="approval-title">正在读取审批</h1>
+          <p class="muted" id="approval-subtitle">
+            这里只处理一个审批事项，不把审批页变成列表广场。
+          </p>
+        </div>
+      </section>
+
+      <section class="sheet-stack">
+        <article class="soft-sheet">
+          <strong>审批内容</strong>
+          <p id="approval-body">正在读取审批内容...</p>
+        </article>
+
+        <article class="soft-sheet">
+          <strong>影响</strong>
+          <p id="approval-impact">正在读取影响说明...</p>
+        </article>
+      </section>
+
+      <label class="note-field" id="approval-note-field">
+        <span>给数字员工的说明</span>
+        <textarea
+          id="approval-note-input"
+          rows="3"
+          placeholder="可选：补充批准或拒绝的说明"
+        ></textarea>
+      </label>
+
+      <div id="approval-feedback" class="approval-feedback" hidden></div>
+
+      <div class="dock approval-dock">
+        <button type="button" class="ghost-button" id="approval-reject-button">拒绝</button>
+        <button type="button" class="primary-button" id="approval-approve-button">
+          批准方案
+        </button>
+      </div>
+    </main>
+
+    <script type="module" src="/approval.js"></script>
+  </body>
+</html>

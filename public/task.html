@@ -7,84 +7,52 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
     <title>AgentHub · 任务详情</title>
+    <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
-    <div class="shell task-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">AgentHub</p>
-          <h1>任务详情</h1>
-          <p class="muted" id="task-page-subtitle">
-            AI经理 先把你带到任务层，看清状态、工作区和进展；需要时你再进入员工直连。
-          </p>
-        </div>
+  <body class="page page-task" data-page="task">
+    <section id="auth-modal" class="auth-entry" hidden>
+      <div id="auth-modal-content" class="auth-entry-content"></div>
+    </section>
+
+    <main class="shell reading-shell" id="task-shell">
+      <header class="topbar compact-topbar">
         <div class="topbar-actions">
           <a class="nav-pill secondary" href="/">返回 AI经理</a>
-          <a class="nav-pill secondary" href="/commander.html">指挥总览</a>
-          <a class="nav-pill" id="task-direct-link" href="/direct.html" hidden>进入员工直连</a>
-          <div class="status-dot-row">
-            <span class="status-dot" id="socket-dot"></span>
-            <span id="socket-text">正在连接</span>
-          </div>
+        </div>
+        <div class="status-dot-row">
+          <span class="status-dot" id="socket-dot"></span>
+          <span id="socket-text">正在连接</span>
         </div>
       </header>
 
-      <section class="panel task-summary-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2 id="task-title">正在读取任务</h2>
-            <p class="muted" id="task-subtitle">
-              这里展示任务目标、负责人、工作区和最近进展。
-            </p>
-          </div>
-          <div id="task-status-badges" class="task-status-badges"></div>
-        </div>
-
-        <div class="task-summary-body">
-          <section class="task-summary-block">
-            <span class="context-eyebrow">任务目标</span>
-            <p id="task-goal" class="task-primary-copy">正在读取任务目标...</p>
-          </section>
-
-          <section class="task-summary-block">
-            <span class="context-eyebrow">最近进展</span>
-            <p id="task-progress" class="task-secondary-copy">正在读取任务进展...</p>
-          </section>
-
-          <div id="task-context-grid" class="context-grid task-context-grid"></div>
-          <div id="task-approval-list" class="task-approval-list"></div>
+      <section class="surface-card hero-card task-hero">
+        <div class="hero-copy compact">
+          <p class="section-kicker">Task</p>
+          <h1 id="task-title">正在读取任务</h1>
+          <p class="muted" id="task-subtitle">
+            这里展示任务目标、负责人、工作区和最近进展。
+          </p>
+          <p class="muted task-page-subtitle" id="task-page-subtitle"></p>
         </div>
       </section>
 
-      <section class="panel task-conversation-panel">
-        <div class="panel-title-row">
-          <div>
-            <h2 id="task-conversation-title">相关对话</h2>
-            <p class="muted" id="task-conversation-subtitle">
-              先看任务关联会话的上下文，再决定是否要亲自进入直连。
-            </p>
-          </div>
-        </div>
+      <section class="sheet-stack">
+        <article class="soft-sheet">
+          <strong>任务目标</strong>
+          <p id="task-goal">正在读取任务目标...</p>
+        </article>
 
-        <div id="task-message-stage" class="message-stage">
-          <div id="task-message-toolbar" class="message-toolbar"></div>
-          <div id="task-messages" class="messages"></div>
-          <button
-            type="button"
-            id="task-message-jump-button"
-            class="message-jump-button"
-            hidden
-          >
-            回到底部
-          </button>
-        </div>
+        <article class="soft-sheet">
+          <strong>最近进展</strong>
+          <p id="task-progress">正在读取任务进展...</p>
+        </article>
       </section>
-    </div>
 
-    <div id="auth-modal" class="session-modal" hidden>
-      <div id="auth-modal-content" class="session-modal-content"></div>
-    </div>
+      <div id="task-status-badges" class="chips task-status-badges"></div>
+      <div id="task-context-grid" class="context-grid task-context-grid"></div>
+      <section id="task-approval-list" class="jump-card-stack"></section>
+    </main>
 
     <script type="module" src="/task.js"></script>
   </body>

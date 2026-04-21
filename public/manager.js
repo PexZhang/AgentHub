@@ -1,6 +1,11 @@
 import { bindCopyMessageButtons, renderCopyMessageButton } from "./message-copy.js";
 import { fetchAuthenticatedSnapshot, installSnapshotRecovery } from "./live-state.js";
 import {
+  applyConversationOverlayCollapsedState,
+  bindConversationShellResizeTracking,
+  syncConversationShellOffsets,
+} from "./conversation-shell.js";
+import {
   LOCAL_OUTBOX_MAX_MESSAGES,
   LOCAL_PENDING_STATUS,
   LOCAL_SENDING_STATUS,
@@ -67,6 +72,7 @@ const state = {
 
 const socketDot = document.querySelector("#socket-dot");
 const socketText = document.querySelector("#socket-text");
+const managerShell = document.querySelector("#manager-shell");
 const managerTopbar = document.querySelector("#manager-topbar");
 const managerSubtitle = document.querySelector("#manager-subtitle");
 const managerContextBody = document.querySelector("#manager-context-body");
@@ -75,6 +81,8 @@ const managerContextExpandButton = document.querySelector("#manager-context-expa
 const managerContextCollapseButton = document.querySelector("#manager-context-collapse-button");
 const managerCollapsedSummary = document.querySelector("#manager-collapsed-summary");
 const managerStatusStrip = document.querySelector("#manager-status-strip");
+const managerOverlayTop = document.querySelector("#manager-overlay-top");
+const managerStage = document.querySelector("#manager-stage");
 const managerMessagesNode = document.querySelector("#manager-messages");
 const managerComposer = document.querySelector("#manager-composer");
 const managerInput = document.querySelector("#manager-input");
@@ -83,6 +91,7 @@ const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
 let managerScrollBound = false;
 let routePromptApplied = false;
+let managerOverlayResizeBound = false;
 
 function applySnapshot(snapshot) {
   state.auth.promptOpen = false;
@@ -274,6 +283,30 @@ function syncComposerHeight() {
 
   managerInput.style.height = "auto";
   managerInput.style.height = `${Math.min(managerInput.scrollHeight, 160)}px`;
+  syncManagerOverlayOffsets();
+}
+
+function syncManagerOverlayOffsets() {
+  syncConversationShellOffsets({
+    stageNode: managerStage,
+    overlayNode: managerOverlayTop,
+    composerNode: managerComposer,
+  });
+}
+
+function bindManagerOverlayResizeTracking() {
+  if (managerOverlayResizeBound) {
+    return;
+  }
+
+  managerOverlayResizeBound = true;
+
+  bindConversationShellResizeTracking({
+    stageNode: managerStage,
+    overlayNode: managerOverlayTop,
+    composerNode: managerComposer,
+    onSync: syncManagerOverlayOffsets,
+  });
 }
 
 function reconcileManagerLocalOutbox() {
@@ -525,7 +558,7 @@ function buildActionHref(action) {
       params.set("deviceName", action.deviceName);
     }
 
-    return `/direct.html?${params.toString()}`;
+    return `/employee.html?${params.toString()}`;
   }
 
   return null;
@@ -554,7 +587,7 @@ function renderManagerActionCard(action) {
     action.description ||
     (action.type === "open_task_detail"
       ? "先看任务状态、工作区和最近进展，再决定要不要直连员工。"
-      : "进入该员工的直连页，查看当前任务、对话和上下文。");
+      : "先查看这位员工的状态、线程和工作目录，再决定是否直接进入聊天。");
   const buttonLabel = action.label || "查看详情并跳转";
 
   return `
@@ -662,22 +695,15 @@ function renderManagerPanel() {
       .join("");
   }
 
-  if (managerTopbar) {
-    managerTopbar.hidden = state.ui.contextCollapsed;
-  }
-
-  if (managerContextBody) {
-    managerContextBody.hidden = state.ui.contextCollapsed;
-  }
-
-  if (managerCollapsedBar) {
-    managerCollapsedBar.hidden = !state.ui.contextCollapsed;
-  }
-
-  if (managerCollapsedSummary) {
-    managerCollapsedSummary.textContent =
-      buildManagerStatusItems().join(" · ") || "展开后可以看到经理说明和当前状态。";
-  }
+  applyConversationOverlayCollapsedState({
+    overlayNode: managerOverlayTop,
+    expandedNodes: [managerTopbar, managerContextBody],
+    collapsedBarNode: managerCollapsedBar,
+    collapsedSummaryNode: managerCollapsedSummary,
+    collapsed: state.ui.contextCollapsed,
+    summaryText:
+      buildManagerStatusItems().join(" · ") || "展开后可以看到经理说明和当前状态。",
+  });
 
   const messages = reconcileManagerLocalOutbox();
   const hiddenMessageCount = state.manager.hiddenMessageCount || 0;
@@ -810,6 +836,10 @@ function renderManagerPanel() {
 }
 
 function renderAuthPrompt() {
+  if (managerShell) {
+    managerShell.hidden = state.auth.promptOpen;
+  }
+
   if (!state.auth.promptOpen) {
     authModal.hidden = true;
     authModalContent.innerHTML = "";
@@ -818,11 +848,15 @@ function renderAuthPrompt() {
 
   authModal.hidden = false;
   authModalContent.innerHTML = `
-    <div class="session-modal-card auth-modal-card">
-      <div class="session-modal-head">
+    <div class="auth-entry-card">
+      <div class="hero-copy compact">
+        <div class="brand-lockup" aria-label="AgentHub">
+          <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
+          <span class="brand-wordmark">AgentHub</span>
+        </div>
         <div>
-          <h3>输入访问令牌</h3>
-          <p class="muted">这个 AgentHub 受保护。输入 App Token 后，经理才能开始接管任务。</p>
+          <h3>连接你的控制平面</h3>
+          <p class="muted">输入访问令牌后进入 AI 经理页面，再加载任务、员工和聊天状态。</p>
         </div>
       </div>
 
@@ -843,7 +877,7 @@ function renderAuthPrompt() {
           : ""
       }
 
-      <div class="directory-modal-foot auth-modal-foot">
+      <div class="auth-entry-foot">
         <button type="button" class="directory-secondary-button" id="auth-clear-button">
           清空本地令牌
         </button>
@@ -883,6 +917,7 @@ function render() {
   renderManagerPanel();
   renderAuthPrompt();
   applyRoutePrompt();
+  requestAnimationFrame(syncManagerOverlayOffsets);
 }
 
 function connect() {
@@ -1017,6 +1052,8 @@ updateManagerSendButtonState();
 bindManagerScrollTracking();
 syncComposerHeight();
 syncKeyboardMode();
+bindManagerOverlayResizeTracking();
+syncManagerOverlayOffsets();
 connect();
 refreshSnapshot();
 render();

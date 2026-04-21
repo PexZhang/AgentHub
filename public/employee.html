@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <title>AgentHub · 员工概览</title>
+    <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page employee-home page-employee" data-page="employee">
+    <section id="auth-modal" class="auth-entry" hidden>
+      <div id="auth-modal-content" class="auth-entry-content"></div>
+    </section>
+
+    <main class="shell employee-shell" id="employee-shell">
+      <header class="topbar compact-topbar">
+        <div class="topbar-actions">
+          <a class="nav-pill secondary" href="/">返回 AI经理</a>
+        </div>
+        <div class="status-dot-row">
+          <span class="status-dot" id="socket-dot"></span>
+          <span id="socket-text">正在连接</span>
+        </div>
+      </header>
+
+      <section class="surface-card hero-card employee-hero">
+        <div class="hero-copy compact">
+          <p class="section-kicker">Employee</p>
+          <h1 id="employee-title">正在读取员工</h1>
+          <p class="muted" id="employee-subtitle">
+            先看清这位数字员工当前的状态、线程和工作目录，再决定要不要进入直聊。
+          </p>
+        </div>
+      </section>
+
+      <section class="sheet-stack">
+        <article class="soft-sheet" id="employee-status-card">
+          <strong>当前状态</strong>
+          <p id="employee-status-copy">正在同步当前员工状态...</p>
+        </article>
+
+        <article class="soft-sheet" id="employee-task-card">
+          <strong>当前任务</strong>
+          <p id="employee-task-copy">正在同步当前任务摘要...</p>
+        </article>
+      </section>
+
+      <div id="employee-context-pills" class="chips"></div>
+
+      <section class="surface-card suggestion-card-list">
+        <button type="button" class="suggestion-link" id="employee-thread-entry">
+          <span>
+            <strong>当前线程</strong>
+            <small id="employee-thread-copy">查看当前线程并继续进入聊天</small>
+          </span>
+          <span>→</span>
+        </button>
+
+        <button type="button" class="suggestion-link" id="employee-session-entry">
+          <span>
+            <strong>导入旧 Codex Session</strong>
+            <small id="employee-session-copy">把这位员工已有的会话接回到 AgentHub</small>
+          </span>
+          <span>→</span>
+        </button>
+
+        <button type="button" class="suggestion-link" id="employee-workdir-entry">
+          <span>
+            <strong>选择工作目录</strong>
+            <small id="employee-workdir-copy">绑定新的工作目录，后续会话会优先在这里工作</small>
+          </span>
+          <span>→</span>
+        </button>
+      </section>
+
+      <div class="dock">
+        <a class="primary-link-button" id="employee-enter-chat" href="/direct.html">进入聊天</a>
+      </div>
+    </main>
+
+    <div id="directory-picker-modal" class="sheet-modal" hidden>
+      <div id="directory-picker-content" class="sheet-modal-content"></div>
+    </div>
+
+    <div id="session-picker-modal" class="sheet-modal" hidden>
+      <div id="session-picker-content" class="sheet-modal-content"></div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

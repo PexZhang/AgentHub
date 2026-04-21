@@ -242,7 +242,12 @@ HOST=
 HUB_ORIGIN=http://localhost:3000
 APP_TOKEN=给手机网页使用的访问令牌
 AGENT_TOKEN=给本地 Agent 回连 Hub 使用的令牌
+STORE_DRIVER=json
 DATA_FILE=/absolute/path/to/state.json
+DATABASE_URL=postgres://user:password@127.0.0.1:5432/agenthub
+STORE_PG_SCHEMA=public
+STORE_PG_STATE_TABLE=hub_state
+STORE_PG_STATE_KEY=primary
 AGENT_CONFIG_FILE=/absolute/path/to/employee.json
 DEVICE_ID=macbook-zhangpeng
 DEVICE_NAME=Zhangpeng MacBook
@@ -304,6 +309,40 @@ HUB_ORIGIN=http://你的公网域名或IP
 - `80/443` 由 Nginx 或 Caddy 对外监听
 - 反向代理到 `127.0.0.1:3000`
 - AgentHub 本体不再直接对公网监听 `3000`
+
+### Hub 存储怎么切到 Postgres
+
+默认情况下，AgentHub 仍然使用 `DATA_FILE` 对应的 JSON 文件存储，方便本地快速起步。
+
+如果你要往多设备、多员工、多人共用演进，建议尽早切到 Postgres：
+
+```env
+STORE_DRIVER=postgres
+DATABASE_URL=postgres://user:password@127.0.0.1:5432/agenthub
+STORE_PG_SCHEMA=public
+STORE_PG_STATE_TABLE=hub_state
+STORE_PG_STATE_KEY=primary
+```
+
+然后先执行一次迁移：
+
+```bash
+npm run db:migrate
+```
+
+如果你之前已经在 `DATA_FILE` 里积累了会话、员工、任务状态，可以再执行一次导入：
+
+```bash
+npm run db:import-json
+```
+
+或者指定一个明确文件：
+
+```bash
+npm run db:import-json -- --file /absolute/path/to/state.json
+```
+
+这一版 Postgres 存储先保持和当前 JSON 状态模型一致，目标是先把存储边界抽出来，后续再继续把任务、员工、审批逐步拆成独立表和仓储层。
 
 ### AI经理知识库怎么扩
 
@@ -380,7 +419,8 @@ AI经理 现在不再只靠一段 prompt 硬记平台规则，而是会加载仓
 4. 确认环境变量里有：
    - `APP_TOKEN`
    - `AGENT_TOKEN`
-   - `DATA_FILE=/data/state.json`
+   - 如果继续走文件存储：`STORE_DRIVER=json` 与 `DATA_FILE=/data/state.json`
+   - 如果切到 Postgres：`STORE_DRIVER=postgres` 与 `DATABASE_URL=...`
 5. 部署完成后，你会拿到一个公网地址，例如：
    - `https://agenthub-example.onrender.com`
 
@@ -409,13 +449,14 @@ HUB_ORIGIN=https://agenthub-example.onrender.com AGENT_TOKEN=你的AGENT_TOKEN n
 ### 当前公网版的限制
 
 - 这版 Hub 仍然是 `单实例`
-- 会话目前还是文件存储，只是可以通过 `DATA_FILE` 放到持久盘
+- 默认仍然是文件存储，只是可以通过 `DATA_FILE` 放到持久盘
+- 现在已经支持切到 `Postgres`，但状态模型还是单体文档，后续还要继续拆仓储和事件流
 - 如果你部署的平台文件系统是临时的，又没有正确挂持久盘，重启或重部署后聊天记录会丢
 
 所以当前更适合：
 
-- 先用 `单实例 + 持久盘`
-- 下一步再把状态迁到 `Postgres`
+- 先用 `单实例 + 持久盘` 或 `单实例 + Postgres`
+- 下一步再把任务、员工、审批继续从单体状态里拆出来
 
 ## 设备与 Agent 规则
 
@@ -481,6 +522,7 @@ AGENT_WORKSPACES_FILE=/absolute/path/to/workspaces.json npm run agent:codex
 - [TASK_MODEL.md](/Users/zhangpeng/ai-chat-mvp/TASK_MODEL.md)
 - [AGENT_RUNTIME_CONTRACT.md](/Users/zhangpeng/ai-chat-mvp/AGENT_RUNTIME_CONTRACT.md)
 - [REBUILD_PLAN.md](/Users/zhangpeng/ai-chat-mvp/REBUILD_PLAN.md)
+- [SCALING_PLAN.md](/Users/zhangpeng/ai-chat-mvp/SCALING_PLAN.md)
 
 已经补充的 repo skills：
 
@@ -532,6 +574,18 @@ Manager smoke test passed.
 
 ```text
 Manager stack smoke test passed.
+```
+
+如果你已经准备好了 `DATABASE_URL`，想直接验证整条 `JSON 样本生成 -> Postgres 迁移 -> JSON 导入 -> Postgres Hub 启动 -> 员工上线 -> 消息回路`，可以运行：
+
+```bash
+DATABASE_URL=postgres://user:password@127.0.0.1:5432/agenthub npm run smoke:store:postgres
+```
+
+成功时会输出：
+
+```text
+Postgres stack smoke test passed.
 ```
 
 如果你要验证“新设备 onboarding -> 员工自检 -> 员工上线 -> 收发消息”这一整条接入链路，可以直接运行：

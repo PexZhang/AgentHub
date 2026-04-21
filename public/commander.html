@@ -7,13 +7,21 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
     <title>AgentHub · 指挥总览</title>
+    <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
-    <div class="shell commander-shell">
+  <body class="page page-commander commander-home">
+    <section id="auth-modal" class="auth-entry" hidden>
+      <div id="auth-modal-content" class="auth-entry-content"></div>
+    </section>
+
+    <div class="shell commander-shell" id="commander-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">AgentHub</p>
+          <div class="brand-lockup" aria-label="AgentHub">
+            <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
+            <span class="brand-wordmark">AgentHub</span>
+          </div>
           <h1>指挥总览</h1>
           <p class="muted" id="commander-subtitle">
             这里只展示你真正需要盯的内容：谁在做什么、在哪台设备、哪个工作区、是否需要你介入。
@@ -65,10 +73,6 @@
         </div>
         <div id="commander-employees" class="commander-employee-list"></div>
       </section>
-    </div>
-
-    <div id="auth-modal" class="session-modal" hidden>
-      <div id="auth-modal-content" class="session-modal-content"></div>
     </div>
 
     <script type="module" src="/commander.js"></script>
