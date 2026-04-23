@@ -361,6 +361,10 @@ function flushManagerLocalOutbox() {
 
   const flushed = flushLocalOutboxMessages(state.localOutbox, {
     send(message) {
+      if (_pollingMode) {
+        _sendManagerMessageViaHTTP(message.text);
+        return true;
+      }
       if (!state.socket || state.socket.readyState !== 1) {
         return false;
       }
@@ -394,11 +398,48 @@ function updateManagerSendButtonState() {
     queueFull;
 }
 
+async function _sendManagerMessageViaHTTP(text) {
+  try {
+    const resp = await fetch("/api/manager-message", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.auth.token || ""}`,
+      },
+      body: JSON.stringify({
+        text,
+        clientMessageId: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
+      }),
+    });
+    if (!resp.ok) {
+      console.error("[AgentHub] HTTP send failed:", resp.status);
+    }
+  } catch (e) {
+    console.error("[AgentHub] HTTP send error:", e);
+  }
+}
+
 function submitManagerMessage() {
   const text = managerInput?.value.trim();
   if (!text) {
     updateManagerSendButtonState();
     return false;
+  }
+
+  if (_pollingMode) {
+    _sendManagerMessageViaHTTP(text);
+    setManagerInputValue("");
+    state.ui.pendingAutoScroll = true;
+    if (isMobileLayout()) {
+      managerInput.blur();
+      syncKeyboardMode();
+    } else {
+      managerInput.focus();
+    }
+    updateManagerSendButtonState();
+    // Trigger an immediate poll to pick up the new message faster
+    setTimeout(_pollSnapshot, 500);
+    return true;
   }
 
   if (!state.socket || state.socket.readyState !== 1) {
@@ -920,8 +961,51 @@ function render() {
   requestAnimationFrame(syncManagerOverlayOffsets);
 }
 
+let _wsFailCount = 0;
+let _pollingMode = false;
+let _pollTimer = null;
+
+async function _pollSnapshot() {
+  if (state.auth.blocked || !_pollingMode) return;
+  try {
+    const result = await fetchAuthenticatedSnapshot(state.auth.token || "");
+    if (result.ok && result.data) {
+      applySnapshot(result.data);
+      render();
+    } else if (result.authRequired) {
+      clearAuthToken();
+      openAuthPrompt(result.message);
+    }
+  } catch {}
+  if (_pollingMode) {
+    _pollTimer = setTimeout(_pollSnapshot, 2000);
+  }
+}
+
+function _startPollingMode() {
+  if (_pollingMode) return;
+  _pollingMode = true;
+  state.connected = true;
+  console.log("[AgentHub] WS unavailable, switching to HTTP polling mode");
+  _pollSnapshot();
+  flushManagerLocalOutbox();
+  render();
+}
+
+function _stopPollingMode() {
+  _pollingMode = false;
+  if (_pollTimer) {
+    clearTimeout(_pollTimer);
+    _pollTimer = null;
+  }
+}
+
 function connect() {
   if (state.auth.blocked) {
+    return;
+  }
+
+  if (_pollingMode) {
     return;
   }
 
@@ -930,10 +1014,32 @@ function connect() {
   }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  let socket;
+  try {
+    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  } catch {
+    _wsFailCount++;
+    if (_wsFailCount >= 2) {
+      _startPollingMode();
+    }
+    return;
+  }
   state.socket = socket;
 
+  const wsTimeout = setTimeout(() => {
+    if (socket.readyState === 0) {
+      socket.close();
+      _wsFailCount++;
+      if (_wsFailCount >= 2) {
+        _startPollingMode();
+      }
+    }
+  }, 5000);
+
   socket.addEventListener("open", () => {
+    clearTimeout(wsTimeout);
+    _wsFailCount = 0;
+    _stopPollingMode();
     state.connected = true;
     socket.send(
       JSON.stringify({
@@ -949,14 +1055,28 @@ function connect() {
   });
 
   socket.addEventListener("close", () => {
+    clearTimeout(wsTimeout);
     state.connected = false;
     if (state.socket === socket) {
       state.socket = null;
     }
     render();
     if (!state.auth.blocked) {
-      setTimeout(connect, 1500);
-      snapshotRecovery.scheduleSnapshotFallback("manager-close");
+      _wsFailCount++;
+      if (_wsFailCount >= 2) {
+        _startPollingMode();
+      } else {
+        setTimeout(connect, 1500);
+        snapshotRecovery.scheduleSnapshotFallback("manager-close");
+      }
+    }
+  });
+
+  socket.addEventListener("error", () => {
+    clearTimeout(wsTimeout);
+    _wsFailCount++;
+    if (_wsFailCount >= 2) {
+      _startPollingMode();
     }
   });
 

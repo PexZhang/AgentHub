@@ -2881,6 +2881,64 @@ app.get("/api/state", (request, response) => {
   response.json(buildSnapshot());
 });
 
+// HTTP fallback for environments where WebSocket is not available
+app.post("/api/manager-message", async (request, response) => {
+  if (!isExpectedToken(APP_TOKEN, readBearerToken(request))) {
+    response.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+    return;
+  }
+
+  const text = normalizeText(request.body?.text);
+  const clientMessageId = normalizeText(request.body?.clientMessageId);
+  if (!text) {
+    response.status(400).json({ ok: false, error: "text is required" });
+    return;
+  }
+
+  const existingMessage = store.findManagerMessageByClientMessageId(clientMessageId);
+  if (existingMessage) {
+    response.json({ ok: true, deduplicated: true });
+    return;
+  }
+
+  const userMessage = await store.addManagerMessage({
+    id: randomUUID(),
+    clientMessageId,
+    role: "user",
+    text,
+    status: "processing",
+    createdAt: new Date().toISOString(),
+  });
+  broadcastSnapshot();
+
+  enqueueManagerTask(async () => {
+    try {
+      const result = await runManager(text);
+      await store.updateManagerMessage(userMessage.id, {
+        status: "answered",
+        answeredAt: new Date().toISOString(),
+        errorMessage: null,
+      });
+      await store.addManagerMessage({
+        id: randomUUID(),
+        role: "assistant",
+        text: result.text,
+        action: result.action || null,
+        createdAt: new Date().toISOString(),
+      });
+      broadcastSnapshot();
+    } catch (error) {
+      await store.updateManagerMessage(userMessage.id, {
+        status: "failed",
+        errorMessage: error?.message || String(error),
+      });
+      broadcastSnapshot();
+    }
+  });
+
+  response.json({ ok: true, messageId: userMessage.id });
+});
+
 wss.on("connection", (socket) => {
   socket.on("message", async (raw) => {
     try {
