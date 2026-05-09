@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
-import { dirname } from "path";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import { dirname, extname, join } from "path";
 import {
   buildConversationTitle,
   normalizeDeviceId,
@@ -10,6 +10,7 @@ import {
 import {
   buildDefaultManagerState,
   buildDefaultStoreState,
+  buildPersistedResourceDescriptor,
   buildPersistedTaskDescriptor,
   buildSnapshotMessageWindow,
   buildTaskDescriptor,
@@ -19,13 +20,42 @@ import {
   normalizeManagerMessage,
   normalizePersistedStoreState,
   normalizeStoredEmployeeRecord,
+  normalizeStoredResourceRecord,
   normalizeStoredTaskRecord,
+  normalizeTaskResourceLinkRecord,
   normalizeStoredWorkspaceRecord,
 } from "./state-model.js";
+
+function countTextLines(text) {
+  const normalized = String(text || "");
+  if (!normalized) {
+    return 0;
+  }
+
+  return normalized.split(/\r\n|\r|\n/u).length;
+}
+
+function buildPreviewText(text, maxLines = 8, maxCharacters = 420) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lines = normalized.split(/\r\n|\r|\n/u).slice(0, maxLines);
+  const preview = lines.join("\n");
+  return preview.length <= maxCharacters ? preview : `${preview.slice(0, maxCharacters)}…`;
+}
+
+function toSafeResourceFileName(resourceId, resourceName) {
+  const normalizedId = normalizeText(resourceId) || randomUUID();
+  const extension = extname(normalizeText(resourceName)).slice(0, 12) || ".txt";
+  return `${normalizedId}${extension}`;
+}
 
 export class JsonStore {
   constructor(options = {}) {
     this.filePath = options.filePath;
+    this.resourceDir = options.resourceDir || join(dirname(options.filePath || "."), "resources");
     this.snapshotConversationMessageLimit = Math.max(
       1,
       Number(options.snapshotConversationMessageLimit || 120)
@@ -42,6 +72,7 @@ export class JsonStore {
 
   async init() {
     await fs.mkdir(dirname(this.filePath), { recursive: true });
+    await fs.mkdir(this.resourceDir, { recursive: true });
 
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
@@ -74,6 +105,190 @@ export class JsonStore {
 
   listConversations() {
     return this.state.conversations;
+  }
+
+  listResources() {
+    return this.state.resources || [];
+  }
+
+  getResource(resourceId) {
+    return this.listResources().find((resource) => resource.id === resourceId) || null;
+  }
+
+  async createTextResource(resource) {
+    const text = String(resource?.text || "");
+    const resourceId = normalizeText(resource?.id) || randomUUID();
+    const fileName = toSafeResourceFileName(resourceId, resource?.name);
+    const storagePath = join(this.resourceDir, fileName);
+    const buffer = Buffer.from(text, "utf8");
+    await fs.writeFile(storagePath, buffer);
+
+    const nextResource = normalizeStoredResourceRecord({
+      id: resourceId,
+      name: resource?.name,
+      kind: "text",
+      mime: normalizeText(resource?.mime) || "text/plain",
+      size: buffer.byteLength,
+      sha256: createHash("sha256").update(buffer).digest("hex"),
+      storagePath,
+      encoding: "utf-8",
+      lineCount: countTextLines(text),
+      summary: normalizeText(resource?.summary) || null,
+      previewText: buildPreviewText(text),
+      uploadedBy: resource?.uploadedBy,
+      sourceConversationId: resource?.sourceConversationId,
+      sourceMessageId: resource?.sourceMessageId,
+      workspaceId: resource?.workspaceId,
+      status: resource?.status || "available",
+      tags: Array.isArray(resource?.tags) ? resource.tags : [],
+      createdAt: resource?.createdAt,
+      updatedAt: resource?.updatedAt,
+    });
+
+    this.state.resources.push(nextResource);
+    await this.persist();
+    return nextResource;
+  }
+
+  async updateResource(resourceId, patch) {
+    const resource = this.getResource(resourceId);
+    if (!resource) {
+      return null;
+    }
+
+    const nextResource = normalizeStoredResourceRecord({
+      ...resource,
+      ...patch,
+      id: resource.id,
+      createdAt: resource.createdAt,
+      updatedAt: patch?.updatedAt || new Date().toISOString(),
+    });
+    Object.assign(resource, nextResource);
+    await this.persist();
+    return resource;
+  }
+
+  async readTextResource(resourceId) {
+    const resource = this.getResource(resourceId);
+    if (!resource) {
+      return null;
+    }
+
+    const content = await fs.readFile(resource.storagePath, "utf8");
+    return {
+      resource,
+      content,
+    };
+  }
+
+  async readTextResourceSlice(resourceId, options = {}) {
+    const loaded = await this.readTextResource(resourceId);
+    if (!loaded) {
+      return null;
+    }
+
+    const content = loaded.content;
+    const lines = content.split(/\r\n|\r|\n/u);
+    const mode = normalizeText(options.mode).toLowerCase() || "full";
+    const limitLines = Math.max(1, Number(options.limitLines || 120));
+    const startLine = Math.max(1, Number(options.startLine || 1));
+    const endLine = Math.max(startLine, Number(options.endLine || startLine + limitLines - 1));
+    const query = normalizeText(options.query);
+
+    if (mode === "head") {
+      return {
+        ...loaded,
+        mode,
+        startLine: 1,
+        endLine: Math.min(lines.length, limitLines),
+        totalLineCount: lines.length,
+        content: lines.slice(0, limitLines).join("\n"),
+      };
+    }
+
+    if (mode === "tail") {
+      const sliceStart = Math.max(0, lines.length - limitLines);
+      return {
+        ...loaded,
+        mode,
+        startLine: sliceStart + 1,
+        endLine: lines.length,
+        totalLineCount: lines.length,
+        content: lines.slice(sliceStart).join("\n"),
+      };
+    }
+
+    if (mode === "slice") {
+      return {
+        ...loaded,
+        mode,
+        startLine,
+        endLine: Math.min(lines.length, endLine),
+        totalLineCount: lines.length,
+        content: lines.slice(startLine - 1, endLine).join("\n"),
+      };
+    }
+
+    if (mode === "search" && query) {
+      const loweredQuery = query.toLowerCase();
+      const hits = [];
+
+      for (let index = 0; index < lines.length; index += 1) {
+        if (!lines[index].toLowerCase().includes(loweredQuery)) {
+          continue;
+        }
+
+        const excerptStart = Math.max(0, index - 2);
+        const excerptEnd = Math.min(lines.length, index + 3);
+        hits.push({
+          line: index + 1,
+          excerpt: lines.slice(excerptStart, excerptEnd).join("\n"),
+        });
+
+        if (hits.length >= Math.max(1, Number(options.maxHits || 8))) {
+          break;
+        }
+      }
+
+      return {
+        ...loaded,
+        mode,
+        query,
+        totalLineCount: lines.length,
+        hits,
+        content: hits
+          .map((hit) => `[line ${hit.line}]\n${hit.excerpt}`)
+          .join("\n\n"),
+      };
+    }
+
+    return {
+      ...loaded,
+      mode: "full",
+      startLine: 1,
+      endLine: lines.length,
+      totalLineCount: lines.length,
+      content,
+    };
+  }
+
+  listTaskResourceLinks() {
+    return this.state.taskResourceLinks || [];
+  }
+
+  listTaskResourceLinksByTask(taskId) {
+    return this.listTaskResourceLinks().filter((link) => link.taskId === taskId);
+  }
+
+  listTaskResourceLinksByResource(resourceId) {
+    return this.listTaskResourceLinks().filter((link) => link.resourceId === resourceId);
+  }
+
+  async createTaskResourceLink(link) {
+    const nextLink = normalizeTaskResourceLinkRecord(link, this.state.taskResourceLinks.length);
+    this.state.taskResourceLinks.push(nextLink);
+    await this.persist();
+    return nextLink;
   }
 
   listWorkspaces() {
@@ -312,6 +527,9 @@ export class JsonStore {
     if (removedTaskIds.length > 0) {
       this.state.approvals = this.state.approvals.filter(
         (approval) => !removedTaskIds.includes(approval.taskId)
+      );
+      this.state.taskResourceLinks = this.state.taskResourceLinks.filter(
+        (link) => !removedTaskIds.includes(link.taskId)
       );
     }
     if (this.state.tasks.length !== before || removedTaskIds.length > 0) {
@@ -703,6 +921,44 @@ export class JsonStore {
       .sort(compareByRecency);
     tasks.push(...fallbackConversationTasks);
     tasks.sort(compareByRecency);
+    const taskMap = new Map(tasks.map((task) => [task.id, task]));
+    const taskResourceLinks = structuredClone(this.state.taskResourceLinks || [])
+      .map((link, index) => normalizeTaskResourceLinkRecord(link, index))
+      .filter((link) => link?.taskId && link?.resourceId);
+    const taskResourceLinksByResourceId = new Map();
+    for (const link of taskResourceLinks) {
+      const current = taskResourceLinksByResourceId.get(link.resourceId) || [];
+      current.push(link);
+      taskResourceLinksByResourceId.set(link.resourceId, current);
+    }
+    const conversationRefsByResourceId = new Map();
+    for (const conversation of clonedConversations) {
+      for (const message of conversation.messages || []) {
+        for (const attachment of message.attachments || []) {
+          const resourceId = normalizeText(attachment?.resourceId);
+          if (!resourceId) {
+            continue;
+          }
+
+          const current = conversationRefsByResourceId.get(resourceId) || [];
+          current.push(conversation.id);
+          conversationRefsByResourceId.set(resourceId, current);
+        }
+      }
+    }
+    const resources = structuredClone(this.state.resources || [])
+      .map((resource, index) => normalizeStoredResourceRecord(resource, index))
+      .map((resource) =>
+        buildPersistedResourceDescriptor(resource, {
+          taskLinks: taskResourceLinksByResourceId.get(resource.id) || [],
+          taskMap,
+          workspaceMap: workspaceLookup,
+          conversationMap,
+          conversationRefs: conversationRefsByResourceId.get(resource.id) || [],
+        })
+      )
+      .filter(Boolean)
+      .sort(compareByRecency);
     const approvals = structuredClone(this.state.approvals || [])
       .map((approval) => normalizeApprovalRecord(approval))
       .sort(compareByRecency);
@@ -714,6 +970,9 @@ export class JsonStore {
       blockedTaskCount: tasks.filter((task) => task.blocked).length,
       recentTaskCount: tasks.length,
       workspaceCount: workspaces.length,
+      resourceCount: resources.length,
+      activeResourceCount: resources.filter((resource) => resource.active).length,
+      orphanedResourceCount: resources.filter((resource) => resource.orphaned).length,
       pendingApprovalCount: approvals.filter((approval) => approval.status === "pending").length,
     };
 
@@ -729,6 +988,7 @@ export class JsonStore {
       devices,
       workspaces,
       tasks,
+      resources,
       approvals,
       manager: {
         messages: structuredClone(managerMessageWindow.messages),

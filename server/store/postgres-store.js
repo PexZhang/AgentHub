@@ -12,6 +12,7 @@ export class PostgresStore extends JsonStore {
       snapshotManagerMessageLimit: options.snapshotManagerMessageLimit,
       managerProvider: options.managerProvider,
       managerModel: options.managerModel,
+      resourceDir: options.resourceDir,
     });
     this.connectionString = normalizeText(options.connectionString);
     this.schema = normalizePgIdentifier(options.schema, "public");

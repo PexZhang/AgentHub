@@ -80,12 +80,25 @@
         </section>
 
         <form id="composer" class="composer floating-composer chat-composer">
+          <input
+            id="resource-input"
+            type="file"
+            accept=".txt,.md,.log,.json,.xml,.yaml,.yml,.js,.ts,.py,.java,.c,.cpp,.h,.ini,.cfg,text/plain,application/json,application/xml,text/markdown"
+            multiple
+            hidden
+          />
+          <div id="composer-resource-row" class="composer-resource-row" hidden></div>
           <textarea
             id="message-input"
             rows="1"
             placeholder="发送消息，直接下达要求或追问当前进展"
           ></textarea>
-          <button type="button" id="send-button">发送</button>
+          <div class="composer-actions-row">
+            <button type="button" id="resource-picker-button" class="secondary-button">
+              上传文本
+            </button>
+            <button type="button" id="send-button">发送</button>
+          </div>
         </form>
       </section>
     </main>

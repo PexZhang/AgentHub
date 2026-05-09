@@ -81,6 +81,61 @@ function buildSpecs() {
       required: ["task_ref"],
     }),
     baseSpec({
+      name: "list_resources",
+      description:
+        "列出当前资源、文本附件或日志文件，可按员工、任务、工作区、状态或标签过滤。",
+      properties: {
+        query: {
+          type: "string",
+          description: "可选，资源名、文件名、日志关键字或用户口头提到的资源线索。",
+        },
+        employee_ref: {
+          type: "string",
+          description: "可选，只看某位员工相关的资源。",
+        },
+        task_ref: {
+          type: "string",
+          description: "可选，只看某条任务挂载的资源。",
+        },
+        workspace_ref: {
+          type: "string",
+          description: "可选，只看某个工作区里的资源。",
+        },
+        status: {
+          type: "string",
+          description: "可选，资源状态，例如 in_use、archived、orphaned。",
+        },
+        tag: {
+          type: "string",
+          description: "可选，资源标签，例如 log、crash、json。",
+        },
+      },
+    }),
+    baseSpec({
+      name: "get_resource_status",
+      description:
+        "查看单个资源的当前状态、关联任务、工作区和正文摘录。用户问某个附件、日志或资源详情时优先使用。",
+      properties: {
+        resource_ref: {
+          type: "string",
+          description: "资源名、资源 ID、文件名或用户提到的资源线索。",
+        },
+        task_ref: {
+          type: "string",
+          description: "可选，帮助把资源限定到某条任务。",
+        },
+        employee_ref: {
+          type: "string",
+          description: "可选，帮助把资源限定到某位员工。",
+        },
+        workspace_ref: {
+          type: "string",
+          description: "可选，帮助把资源限定到某个工作区。",
+        },
+      },
+      required: ["resource_ref"],
+    }),
+    baseSpec({
       name: "list_workspaces",
       description: "列出当前已接入的工作区、目录或仓库，帮助经理判断哪些员工能处理哪些目标。",
       properties: {

@@ -129,6 +129,124 @@ function buildProgressEvent(payload, overrides = {}) {
   };
 }
 
+async function fetchHubJson(pathValue, init = {}) {
+  const response = await fetch(`${HUB_ORIGIN}${pathValue}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      "x-agenthub-token": AGENT_TOKEN,
+      ...(init.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.message || `读取 Hub 资源失败：${response.status}`
+    );
+  }
+
+  return payload;
+}
+
+async function buildAttachmentContext(attachment) {
+  const resourceId = normalizeText(attachment?.resourceId);
+  if (!resourceId) {
+    return "";
+  }
+
+  const name = normalizeText(attachment?.name) || resourceId;
+  const baseMeta = [
+    `名称：${name}`,
+    attachment?.mime ? `类型：${attachment.mime}` : null,
+    Number.isFinite(Number(attachment?.size)) ? `大小：${attachment.size} bytes` : null,
+    Number.isFinite(Number(attachment?.lineCount)) ? `行数：${attachment.lineCount}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const shouldReadFull = Number(attachment?.size || 0) > 0 && Number(attachment.size) <= 64 * 1024;
+  const primaryMode = shouldReadFull ? "full" : "head";
+  const primary = await fetchHubJson(
+    `/api/resources/${encodeURIComponent(resourceId)}/content?mode=${primaryMode}&limitLines=120`
+  );
+  let body = String(primary?.content || "").trim();
+
+  if (!shouldReadFull && Number(attachment?.lineCount || 0) > 120) {
+    const tail = await fetchHubJson(
+      `/api/resources/${encodeURIComponent(resourceId)}/content?mode=tail&limitLines=80`
+    );
+    const tailBody = String(tail?.content || "").trim();
+    if (tailBody) {
+      body = [body, "[末尾片段]", tailBody].filter(Boolean).join("\n\n");
+    }
+  }
+
+  return [
+    `[文本资源] ${baseMeta}`,
+    body || String(attachment?.previewText || "").trim() || "资源正文暂时为空。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function enrichIncomingMessage(message, conversation) {
+  const attachments = Array.isArray(message?.attachments) ? message.attachments.filter(Boolean) : [];
+  if (attachments.length === 0) {
+    return {
+      message,
+      conversation,
+    };
+  }
+
+  const attachmentSections = [];
+  for (const attachment of attachments) {
+    try {
+      const section = await buildAttachmentContext(attachment);
+      if (section) {
+        attachmentSections.push(section);
+      }
+    } catch (error) {
+      attachmentSections.push(
+        `[文本资源] ${normalizeText(attachment?.name) || "未命名资源"}\n读取失败：${error.message || "未知错误"}`
+      );
+    }
+  }
+
+  if (attachmentSections.length === 0) {
+    return {
+      message,
+      conversation,
+    };
+  }
+
+  const composedText = [
+    normalizeText(message?.text),
+    "以下是用户附带的文本资源，请结合这些材料继续处理：",
+    attachmentSections.join("\n\n"),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const nextMessage = {
+    ...message,
+    composedText,
+  };
+  const nextConversation = {
+    ...conversation,
+    messages: Array.isArray(conversation?.messages)
+      ? conversation.messages.map((item) =>
+          item?.id === message?.id ? { ...item, text: composedText } : item
+        )
+      : [],
+  };
+
+  return {
+    message: nextMessage,
+    conversation: nextConversation,
+  };
+}
+
 function normalizeWorkspaceRecord(workspace, index = 0) {
   const pathValue = normalizeText(workspace?.path || workspace?.workdir);
   if (!pathValue) {
@@ -496,9 +614,10 @@ function connect() {
         )
       );
 
+      const runtimeInput = await enrichIncomingMessage(payload.message, payload.conversation);
       const reply = await runtimeAdapter.reply({
-        conversation: payload.conversation,
-        message: payload.message,
+        conversation: runtimeInput.conversation,
+        message: runtimeInput.message,
       });
 
       if (reply.recentCodexSessions) {

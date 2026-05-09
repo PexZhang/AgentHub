@@ -6,16 +6,16 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
     />
-    <title>AgentHub · 任务详情</title>
+    <title>AgentHub · 资源详情</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="page page-task" data-page="task">
+  <body class="page page-task page-resource" data-page="resource">
     <section id="auth-modal" class="auth-entry" hidden>
       <div id="auth-modal-content" class="auth-entry-content"></div>
     </section>
 
-    <main class="shell reading-shell" id="task-shell">
+    <main class="shell reading-shell" id="resource-shell">
       <header class="topbar compact-topbar">
         <div class="topbar-actions">
           <a class="nav-pill secondary" href="/">返回 AI经理</a>
@@ -28,33 +28,33 @@
 
       <section class="surface-card hero-card task-hero">
         <div class="hero-copy compact">
-          <p class="section-kicker">Task</p>
-          <h1 id="task-title">正在读取任务</h1>
-          <p class="muted" id="task-subtitle">
-            这里展示任务目标、负责人、工作区和最近进展。
+          <p class="section-kicker">Resource</p>
+          <h1 id="resource-title">正在读取资源</h1>
+          <p class="muted" id="resource-subtitle">
+            这里展示资源状态、关联任务和正文摘录。
           </p>
-          <p class="muted task-page-subtitle" id="task-page-subtitle"></p>
+          <p class="muted task-page-subtitle" id="resource-page-subtitle"></p>
         </div>
       </section>
 
+      <div id="resource-status-badges" class="chips task-status-badges"></div>
+      <div id="resource-meta-grid" class="context-grid task-context-grid"></div>
+
       <section class="sheet-stack">
         <article class="soft-sheet">
-          <strong>任务目标</strong>
-          <p id="task-goal">正在读取任务目标...</p>
+          <strong>资源摘要</strong>
+          <p id="resource-preview">正在读取资源摘要...</p>
         </article>
 
-        <article class="soft-sheet">
-          <strong>最近进展</strong>
-          <p id="task-progress">正在读取任务进展...</p>
+        <article class="soft-sheet resource-content-sheet">
+          <strong id="resource-content-title">正文摘录</strong>
+          <pre id="resource-content" class="resource-content-block">正在读取资源内容...</pre>
         </article>
       </section>
 
-      <div id="task-status-badges" class="chips task-status-badges"></div>
-      <div id="task-context-grid" class="context-grid task-context-grid"></div>
-      <section id="task-resource-list" class="jump-card-stack"></section>
-      <section id="task-approval-list" class="jump-card-stack"></section>
+      <section id="resource-actions" class="jump-card-stack"></section>
     </main>
 
-    <script type="module" src="/task.js"></script>
+    <script type="module" src="/resource.js"></script>
   </body>
 </html>

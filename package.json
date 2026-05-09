@@ -16,6 +16,7 @@
     "agent:codex": "AGENT_ID=codex-agent AGENT_NAME='Codex Agent' AGENT_MODE=codex node agent/index.js",
     "agent:openai": "AGENT_ID=openai-agent AGENT_NAME='OpenAI Agent' AGENT_MODE=openai node agent/index.js",
     "smoke": "node scripts/smoke-test.js",
+    "smoke:resource": "node scripts/resource-governance-smoke-test.js",
     "smoke:store:postgres": "node scripts/postgres-stack-smoke-test.js",
     "smoke:manager": "node scripts/manager-smoke-test.js",
     "smoke:manager:stack": "node scripts/manager-stack-smoke-test.js",

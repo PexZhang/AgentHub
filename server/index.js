@@ -16,6 +16,8 @@ import {
   buildAttentionItems,
   formatApprovalListReply,
   formatEmployeeListReply,
+  formatResourceDetailReply,
+  formatResourceListReply,
   formatTaskListReply,
   formatWorkspaceListReply,
   getActiveTaskForAgent,
@@ -30,6 +32,7 @@ import {
 } from "./shared/domain-utils.js";
 import { createStoreFromEnv } from "./store/create-store.js";
 import {
+  buildPersistedTaskDescriptor,
   buildTaskDescriptor,
   buildTaskStatusLabel,
   compareByRecency,
@@ -75,6 +78,14 @@ const SNAPSHOT_MANAGER_MESSAGE_LIMIT = Math.max(
 const SNAPSHOT_CONVERSATION_MESSAGE_LIMIT = Math.max(
   40,
   Number(process.env.SNAPSHOT_CONVERSATION_MESSAGE_LIMIT || 120)
+);
+const MAX_TEXT_RESOURCE_BYTES = Math.max(
+  32 * 1024,
+  Number(process.env.MAX_TEXT_RESOURCE_BYTES || 1024 * 1024)
+);
+const MAX_TEXT_RESOURCE_FILES = Math.max(
+  1,
+  Number(process.env.MAX_TEXT_RESOURCE_FILES || 4)
 );
 const STALE_TASK_MINUTES = 12;
 const STALE_AGENT_MINUTES = 5;
@@ -191,6 +202,85 @@ function buildManagerPrompt() {
   ].join("\n");
 }
 
+function buildManagerRuntimeContext(snapshot = buildSnapshot()) {
+  const summary = snapshot.manager?.summary || {};
+  const agents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
+  const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
+  const approvals = Array.isArray(snapshot.approvals) ? snapshot.approvals : [];
+  const workspaces = Array.isArray(snapshot.workspaces) ? snapshot.workspaces : [];
+
+  const employeeLines =
+    agents.length > 0
+      ? agents
+          .slice(0, 12)
+          .map((agent) => {
+            const currentTask = tasks.find((task) => task.agentId === agent.id && task.active);
+            return [
+              `- ${agent.name} (${agent.id})`,
+              `online=${agent.online ? "true" : "false"}`,
+              `status=${agent.status || "unknown"}`,
+              `runtime=${agent.runtime || agent.mode || "unknown"}`,
+              `device=${agent.deviceName || agent.deviceId || "unknown"}`,
+              `lastSeenAt=${agent.lastSeenAt || "unknown"}`,
+              currentTask ? `currentTask=${currentTask.title} / ${currentTask.statusLabel}` : "currentTask=none",
+            ].join("; ");
+          })
+          .join("\n")
+      : "- none";
+
+  const taskLines =
+    tasks.length > 0
+      ? tasks
+          .slice(0, 10)
+          .map(
+            (task) =>
+              `- ${task.title} (${task.id}); owner=${task.agentName || task.agentId || "unassigned"}; status=${task.statusLabel || task.status}; active=${task.active ? "true" : "false"}; summary=${task.progressSummary || ""}`
+          )
+          .join("\n")
+      : "- none";
+
+  const approvalLines =
+    approvals.length > 0
+      ? approvals
+          .slice(0, 8)
+          .map(
+            (approval) =>
+              `- ${approval.id}; status=${approval.status}; taskId=${approval.taskId || "none"}; reason=${approval.reason || ""}`
+          )
+          .join("\n")
+      : "- none";
+
+  const workspaceLines =
+    workspaces.length > 0
+      ? workspaces
+          .slice(0, 8)
+          .map(
+            (workspace) =>
+              `- ${workspace.name} (${workspace.id}); online=${workspace.online ? "true" : "false"}; employee=${workspace.employeeName || workspace.employeeId || "unknown"}; path=${workspace.path || ""}`
+          )
+          .join("\n")
+      : "- none";
+
+  return [
+    "Runtime context from AgentHub live snapshot.",
+    "Use this as the source of truth for current employees, online/offline state, tasks, workspaces, approvals, and resources. Historical chat messages may be stale; do not infer current status from history when it conflicts with this snapshot.",
+    `snapshotGeneratedAt=${snapshot.generatedAt || new Date().toISOString()}`,
+    `summary: onlineEmployees=${summary.onlineAgentCount ?? agents.filter((agent) => agent.online).length}; totalEmployees=${summary.totalAgentCount ?? agents.length}; activeTasks=${summary.activeTaskCount ?? 0}; blockedTasks=${summary.blockedTaskCount ?? 0}; pendingApprovals=${summary.pendingApprovalCount ?? 0}; workspaces=${summary.workspaceCount ?? workspaces.length}; resources=${summary.resourceCount ?? 0}`,
+    "employees:",
+    employeeLines,
+    "tasks:",
+    taskLines,
+    "approvals:",
+    approvalLines,
+    "workspaces:",
+    workspaceLines,
+  ].join("\n");
+}
+
+function buildManagerInstructions() {
+  return [MANAGER_PROMPT, buildManagerRuntimeContext()].join("\n\n");
+}
+
 function isExpectedToken(expectedToken, actualToken) {
   if (!expectedToken) {
     return true;
@@ -267,6 +357,106 @@ function normalizeHttpOrigin(value) {
     return "";
   }
   return normalized;
+}
+
+function requireHttpAuth(
+  request,
+  response,
+  { allowApp = false, allowAgent = false, message = "请求需要有效的访问令牌" } = {}
+) {
+  const token = readBearerToken(request);
+  const appAuthorized = allowApp && isExpectedToken(APP_TOKEN, token);
+  const agentAuthorized =
+    allowAgent && Boolean(normalizeText(AGENT_TOKEN)) && isExpectedToken(AGENT_TOKEN, token);
+
+  if (appAuthorized) {
+    return "app";
+  }
+
+  if (agentAuthorized) {
+    return "agent";
+  }
+
+  response.status(401).json({
+    ok: false,
+    error: "UNAUTHORIZED",
+    message,
+  });
+  return null;
+}
+
+function isTextLikeMime(mime) {
+  const normalized = normalizeText(mime).toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("text/") ||
+    [
+      "application/json",
+      "application/ld+json",
+      "application/xml",
+      "application/javascript",
+      "application/x-javascript",
+      "application/x-ndjson",
+      "application/yaml",
+      "application/x-yaml",
+    ].includes(normalized)
+  );
+}
+
+function inferTextResourceTags(name, mime) {
+  const normalizedName = normalizeText(name).toLowerCase();
+  const normalizedMime = normalizeText(mime).toLowerCase();
+  const tags = ["text"];
+
+  if (/crash|panic|fatal|stack|dump/.test(normalizedName)) {
+    tags.push("crash");
+  }
+  if (/log/.test(normalizedName)) {
+    tags.push("log");
+  }
+  if (/json/.test(normalizedName) || normalizedMime.includes("json")) {
+    tags.push("json");
+  }
+  if (/ya?ml/.test(normalizedName) || normalizedMime.includes("yaml")) {
+    tags.push("yaml");
+  }
+  if (/\.md$/.test(normalizedName)) {
+    tags.push("markdown");
+  }
+
+  return [...new Set(tags)];
+}
+
+function buildResourceAttachment(resource) {
+  if (!resource) {
+    return null;
+  }
+
+  return {
+    resourceId: resource.resourceId || resource.id,
+    name: resource.name,
+    kind: resource.kind,
+    mime: resource.mime,
+    size: resource.size,
+    encoding: resource.encoding,
+    lineCount: resource.lineCount,
+    previewText: resource.previewText,
+    summary: resource.summary,
+    status: resource.status,
+    statusLabel: resource.statusLabel || null,
+    workspaceId: resource.workspaceId || null,
+    workspaceName: resource.workspaceName || null,
+    sourceConversationId: resource.sourceConversationId || null,
+    sourceMessageId: resource.sourceMessageId || null,
+    primaryTaskId: resource.primaryTaskId || null,
+    primaryTaskTitle: resource.primaryTaskTitle || null,
+    primaryAgentId: resource.primaryAgentId || null,
+    primaryAgentName: resource.primaryAgentName || null,
+    tags: Array.isArray(resource.tags) ? resource.tags : [],
+  };
 }
 
 function getPreferredHubOrigin() {
@@ -430,6 +620,7 @@ async function submitUserTaskToEmployee({
   workspaceId = null,
   requestedBy = "human",
   taskDraft = null,
+  attachments = [],
 }) {
   const existing = store.findConversationMessageByClientMessageId(clientMessageId);
   if (existing) {
@@ -440,6 +631,78 @@ async function submitUserTaskToEmployee({
     };
   }
 
+  let conversation = await ensureConversationForEmployeeTask({
+    agentId,
+    text,
+    requestedConversationId,
+    title,
+    workspaceId,
+  });
+
+  const message = {
+    id: randomUUID(),
+    clientMessageId: normalizeText(clientMessageId) || null,
+    role: "user",
+    text,
+    agentId,
+    attachments: Array.isArray(attachments) ? attachments.filter(Boolean) : [],
+    status: agentClients.has(agentId) ? "sent" : "queued",
+    createdAt: new Date().toISOString(),
+  };
+
+  await store.addMessage(conversation.id, message);
+  const task = await createTaskForUserMessage({
+    conversation,
+    message,
+    agentId,
+    agentConnection: agentClients.get(agentId),
+    taskDraft,
+  });
+  if (message.attachments.length > 0) {
+    for (const attachment of message.attachments) {
+      const resourceId = normalizeText(attachment?.resourceId);
+      if (!resourceId) {
+        continue;
+      }
+
+      await store.updateResource(resourceId, {
+        sourceConversationId: conversation.id,
+        sourceMessageId: message.id,
+        workspaceId: conversation.workspaceId || null,
+      });
+
+      if (task) {
+        await store.createTaskResourceLink({
+          taskId: task.id,
+          resourceId,
+          role: "input",
+          attachedBy: requestedBy,
+        });
+      }
+    }
+  }
+  if (task && normalizeText(requestedBy) && requestedBy !== "human" && !taskDraft) {
+    await store.updateTask(task.id, { requestedBy: normalizeText(requestedBy) });
+  }
+
+  if (agentClients.has(agentId)) {
+    await deliverMessageToAgent(agentId, conversation.id, message, task);
+  }
+
+  return {
+    conversation,
+    message,
+    task,
+  };
+}
+
+async function ensureConversationForEmployeeTask({
+  agentId,
+  text,
+  requestedConversationId = null,
+  title = null,
+  workspaceId = null,
+}) {
   const agentConnection = agentClients.get(agentId);
   let conversation = requestedConversationId ? store.getConversation(requestedConversationId) : null;
 
@@ -479,37 +742,7 @@ async function submitUserTaskToEmployee({
     });
   }
 
-  const message = {
-    id: randomUUID(),
-    clientMessageId: normalizeText(clientMessageId) || null,
-    role: "user",
-    text,
-    agentId,
-    status: agentClients.has(agentId) ? "sent" : "queued",
-    createdAt: new Date().toISOString(),
-  };
-
-  await store.addMessage(conversation.id, message);
-  const task = await createTaskForUserMessage({
-    conversation,
-    message,
-    agentId,
-    agentConnection,
-    taskDraft,
-  });
-  if (task && normalizeText(requestedBy) && requestedBy !== "human" && !taskDraft) {
-    await store.updateTask(task.id, { requestedBy: normalizeText(requestedBy) });
-  }
-
-  if (agentClients.has(agentId)) {
-    await deliverMessageToAgent(agentId, conversation.id, message, task);
-  }
-
-  return {
-    conversation,
-    message,
-    task,
-  };
+  return conversation;
 }
 
 function buildTaskAssignmentPayload(task, conversation) {
@@ -886,6 +1119,16 @@ function isEmployeeDetailQuestion(text) {
   );
 }
 
+function isResourceListQuestion(text) {
+  return /(资源|附件|文件|日志|crash|log)/i.test(text) &&
+    /(有哪些|列表|最近|上传|挂了哪些|关联哪些|都有什么|资料)/.test(text);
+}
+
+function isResourceDetailQuestion(text) {
+  return /(资源|附件|文件|日志|crash|log)/i.test(text) &&
+    /(详情|具体|状态|内容|看一下|查看|帮我看看|摘录|头部|尾部)/.test(text);
+}
+
 function selectEmployeesForDetail(snapshot, text, mentionedAgent) {
   if (mentionedAgent) {
     return [mentionedAgent];
@@ -979,43 +1222,6 @@ function isAttentionQuestion(text) {
   return /(最该关注|优先关注|谁卡住了|谁停住了|哪里有风险|有什么异常|需要我介入|待我确认|谁需要跟进|谁最危险|阻塞任务|长时间无更新|谁离线了)/.test(
     text
   );
-}
-
-function shouldPreferDeterministicManagerFlow(text, snapshot = buildSnapshot()) {
-  const mentionedAgent = findMentionedAgent(snapshot, text);
-  const directChatIntent = analyzeDirectChatIntent(text, snapshot);
-
-  if (
-    isManagerIdentityQuestion(text) ||
-    isManagerCapabilityQuestion(text) ||
-    isOnboardingGuideQuestion(text) ||
-    isManagerKnowledgeQuestion(text) ||
-    isAttentionQuestion(text)
-  ) {
-    return true;
-  }
-
-  if (
-    directChatIntent ||
-    /(审批|授权|批准|风险)/.test(text) ||
-    (mentionedAgent && isEmployeeDiagnosisQuestion(text)) ||
-    (mentionedAgent && isEmployeeDetailQuestion(text)) ||
-    (mentionedAgent && /(进度|在做|干啥|做啥|状态)/.test(text)) ||
-    (mentionedAgent &&
-      /(切到|直连|对话|连接|进入|打开|连到|切换到|带我去|跳到)/.test(text))
-  ) {
-    return true;
-  }
-
-  if (mentionedAgent && /(催一下|跟进一下|提醒一下|告诉|通知|让.*汇报|继续推进|先停一下|暂停一下|补充要求)/.test(text)) {
-    return true;
-  }
-
-  if (/(任务|进度|状态|做到哪|完成没|卡住)/.test(text)) {
-    return true;
-  }
-
-  return false;
 }
 
 function isEmployeeDiagnosisQuestion(text) {
@@ -1349,6 +1555,157 @@ function filterTasksForManager(snapshot, { employeeRef = "", status = "" } = {})
   };
 }
 
+function resolveWorkspaceMatchesForResources(snapshot, workspaceRef) {
+  const reference = normalizeText(workspaceRef).toLowerCase();
+  if (!reference) {
+    return [];
+  }
+
+  return (snapshot.workspaces || []).filter((workspace) => {
+    const haystacks = [workspace.id, workspace.name, workspace.path, workspace.deviceName]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return haystacks.some((value) => value.includes(reference));
+  });
+}
+
+function filterResourcesForManager(
+  snapshot,
+  {
+    resourceRef = "",
+    employeeRef = "",
+    taskRef = "",
+    workspaceRef = "",
+    status = "",
+    tag = "",
+  } = {}
+) {
+  let resources = [...(snapshot.resources || [])];
+
+  if (normalizeText(employeeRef)) {
+    const matches = resolveEmployeeMatches(employeeRef, snapshot);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: "EMPLOYEE_NOT_FOUND",
+        message: "没有找到这位数字员工。",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: "EMPLOYEE_AMBIGUOUS",
+        message: "员工名称匹配到多位，请更具体一点。",
+        matches: matches.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          deviceName: agent.deviceName,
+        })),
+      };
+    }
+
+    resources = resources.filter((resource) =>
+      (resource.agentIds || []).includes(matches[0].id)
+    );
+  }
+
+  if (normalizeText(taskRef)) {
+    const matches = resolveTaskMatches(snapshot, taskRef);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: "TASK_NOT_FOUND",
+        message: "没有找到对应的任务。",
+      };
+    }
+
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: "TASK_AMBIGUOUS",
+        message: "找到了多条可能的任务，需要更具体一点。",
+        matches: matches.slice(0, 6).map((task) => ({
+          id: task.id,
+          title: task.title,
+          agentName: task.agentName,
+          deviceName: task.deviceName,
+        })),
+      };
+    }
+
+    resources = resources.filter((resource) =>
+      (resource.linkedTaskIds || []).includes(matches[0].id)
+    );
+  }
+
+  if (normalizeText(workspaceRef)) {
+    const matches = resolveWorkspaceMatchesForResources(snapshot, workspaceRef);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: "WORKSPACE_NOT_FOUND",
+        message: "没有找到匹配的工作区。",
+      };
+    }
+
+    resources = resources.filter((resource) =>
+      matches.some((workspace) => workspace.id === resource.workspaceId)
+    );
+  }
+
+  if (normalizeText(status)) {
+    const statusRef = normalizeStatusReference(status);
+    resources = resources.filter((resource) => {
+      const candidates = [resource.status, resource.statusLabel]
+        .filter(Boolean)
+        .map((value) => normalizeStatusReference(value));
+      return candidates.some((value) => value.includes(statusRef));
+    });
+  }
+
+  if (normalizeText(tag)) {
+    const tagRef = normalizeText(tag).toLowerCase();
+    resources = resources.filter((resource) =>
+      (resource.tags || []).some((item) => String(item).toLowerCase().includes(tagRef))
+    );
+  }
+
+  if (normalizeText(resourceRef)) {
+    const reference = normalizeText(resourceRef).toLowerCase();
+    const exact = resources.filter((resource) => {
+      const haystacks = [resource.id, resource.resourceId, resource.name]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return haystacks.includes(reference);
+    });
+    if (exact.length > 0) {
+      resources = exact;
+    } else {
+      resources = resources.filter((resource) => {
+        const haystacks = [
+          resource.id,
+          resource.resourceId,
+          resource.name,
+          resource.summary,
+          resource.previewText,
+          resource.workspaceName,
+          resource.primaryTaskTitle,
+          ...(resource.tags || []),
+        ]
+          .filter(Boolean)
+          .map((value) => String(value).toLowerCase());
+        return haystacks.some((value) => value.includes(reference));
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    resources,
+  };
+}
+
 async function listEmployeesTool() {
   const snapshot = buildSnapshot();
   return {
@@ -1441,6 +1798,111 @@ async function getTaskStatusTool(args = {}) {
     clientAction: buildTaskDetailAction(task, {
       description: "查看这条任务的完整状态、工作区和相关会话，再决定是否继续追问或切到直连。",
       label: "查看任务详情",
+    }),
+  };
+}
+
+async function listResourcesTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const filtered = filterResourcesForManager(snapshot, {
+    resourceRef: args.query,
+    employeeRef: args.employee_ref,
+    taskRef: args.task_ref,
+    workspaceRef: args.workspace_ref,
+    status: args.status,
+    tag: args.tag,
+  });
+
+  if (!filtered.ok) {
+    return {
+      output: filtered,
+      clientAction: null,
+    };
+  }
+
+  const resources = filtered.resources.slice(0, 12);
+  const clientAction =
+    resources.length === 1
+      ? buildResourceDetailAction(resources[0], {
+          label: `查看 ${resources[0].name} 的详情`,
+        })
+      : null;
+
+  return {
+    output: {
+      ok: true,
+      resources,
+      summary: snapshot.manager.summary,
+    },
+    clientAction,
+  };
+}
+
+async function getResourceStatusTool(args = {}) {
+  const snapshot = buildSnapshot();
+  const filtered = filterResourcesForManager(snapshot, {
+    resourceRef: args.resource_ref,
+    employeeRef: args.employee_ref,
+    taskRef: args.task_ref,
+    workspaceRef: args.workspace_ref,
+  });
+
+  if (!filtered.ok) {
+    return {
+      output: filtered,
+      clientAction: null,
+    };
+  }
+
+  if (filtered.resources.length === 0) {
+    return {
+      output: {
+        ok: false,
+        error: "RESOURCE_NOT_FOUND",
+        message: "没有找到对应的资源。",
+      },
+      clientAction: null,
+    };
+  }
+
+  if (filtered.resources.length > 1) {
+    return {
+      output: {
+        ok: false,
+        error: "RESOURCE_AMBIGUOUS",
+        message: "找到了多份可能的资源，需要更具体一点。",
+        matches: filtered.resources.slice(0, 8).map((resource) => ({
+          id: resource.id,
+          name: resource.name,
+          status: resource.status,
+          workspaceName: resource.workspaceName,
+          primaryTaskTitle: resource.primaryTaskTitle,
+        })),
+      },
+      clientAction: null,
+    };
+  }
+
+  const resource = filtered.resources[0];
+  let excerpt = "";
+  try {
+    const result = await store.readTextResourceSlice(resource.id, {
+      mode: "head",
+      limitLines: 40,
+    });
+    excerpt = normalizeText(result?.content);
+  } catch {
+    excerpt = "";
+  }
+
+  return {
+    output: {
+      ok: true,
+      resource,
+      excerpt: excerpt || null,
+    },
+    clientAction: buildResourceDetailAction(resource, {
+      label: `查看 ${resource.name} 的详情`,
     }),
   };
 }
@@ -1644,6 +2106,28 @@ function buildTaskDetailAction(task, overrides = {}) {
       overrides.description ||
       "查看这条任务的状态、工作区、最近进展和相关会话，再决定是否要直连员工。",
     label: overrides.label || "查看任务详情",
+  };
+}
+
+function buildResourceDetailAction(resource, overrides = {}) {
+  if (!resource?.id && !resource?.resourceId) {
+    return null;
+  }
+
+  return {
+    type: "open_resource_detail",
+    resourceId: resource.resourceId || resource.id,
+    resourceName: resource.name || null,
+    taskId: resource.primaryTaskId || null,
+    conversationId: resource.sourceConversationId || null,
+    agentId: resource.primaryAgentId || null,
+    agentName: resource.primaryAgentName || null,
+    deviceName: overrides.deviceName || null,
+    title: overrides.title || `资源详情 · ${resource.name || "未命名资源"}`,
+    description:
+      overrides.description ||
+      "查看这份资源的状态、关联任务和正文摘录，再决定是否继续追问或直连员工。",
+    label: overrides.label || "查看资源详情",
   };
 }
 
@@ -2058,6 +2542,8 @@ const managerToolRegistry = createManagerToolRegistry({
   list_attention_items: listAttentionItemsTool,
   list_tasks: listTasksTool,
   get_task_status: getTaskStatusTool,
+  list_resources: listResourcesTool,
+  get_resource_status: getResourceStatusTool,
   list_workspaces: listWorkspacesTool,
   resolve_workspace_for_employee: resolveWorkspaceForEmployeeTool,
   list_approvals: listApprovalsTool,
@@ -2090,7 +2576,7 @@ async function createOpenAIManagerResponse(input, previousResponseId = null) {
     },
     body: JSON.stringify({
       model: MANAGER_MODEL,
-      instructions: MANAGER_PROMPT,
+      instructions: buildManagerInstructions(),
       input,
       previous_response_id: previousResponseId || undefined,
       tools: buildResponsesManagerTools(),
@@ -2103,7 +2589,7 @@ async function createOpenAIManagerResponse(input, previousResponseId = null) {
 
 function buildManagerChatHistory() {
   return [
-    { role: "system", content: MANAGER_PROMPT },
+    { role: "system", content: buildManagerInstructions() },
     ...store
       .listManagerMessages()
       .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
@@ -2341,10 +2827,38 @@ function getLatestAssistantManagerText() {
   return "";
 }
 
+function normalizeIntentText(text) {
+  return normalizeText(text)
+    .toLowerCase()
+    .replace(/[?？!！。.,，;；:：]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isEmployeeRosterQuestion(text) {
-  return /(谁在线|谁离线|在线员工|离线员工|当前有哪些员工|现在有哪些员工|员工有哪些|有哪些员工|员工列表|当前员工|数字员工有哪些|当前有谁在线)/.test(
-    normalizeText(text)
-  );
+  const normalized = normalizeIntentText(text);
+  const compact = normalized.replace(/\s+/g, "");
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    /(谁在线|谁离线|哪些员工在线|哪些员工离线|员工.*在线|员工.*离线|在线员工|离线员工|当前有哪些员工|现在有哪些员工|员工有哪些|有哪些员工|员工列表|当前员工|数字员工有哪些|当前有谁在线|当前有谁离线|有员工在线吗)/.test(
+      compact
+    )
+  ) {
+    return true;
+  }
+
+  const employeeRef = "(?:agents?|employees?|digital employees?|staff)";
+  return [
+    new RegExp(`\\b(?:who(?:'s| is| are)?|which|what)\\s+(?:${employeeRef})?\\s*(?:are|is)?\\s*(?:online|offline|available|connected|active)\\b`, "i"),
+    new RegExp(`\\b(?:online|offline|available|connected|active)\\s+${employeeRef}\\b`, "i"),
+    new RegExp(`\\b(?:list|show|display)\\s+(?:all\\s+)?${employeeRef}(?:\\s+(?:online|offline|status|statuses|state|states))?\\b`, "i"),
+    new RegExp(`\\b(?:how many)\\s+${employeeRef}\\s+(?:are\\s+)?(?:online|offline|available|connected|active)\\b`, "i"),
+    new RegExp(`\\b(?:are there|is there)\\s+(?:any\\s+)?${employeeRef}\\s+(?:online|offline|available|connected|active)\\b`, "i"),
+    /\b(?:anyone|anybody|who(?:'s| is)?)\s+(?:online|offline|available|connected)\b/i,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function isGenericEmployeeReferenceCandidate(candidate) {
@@ -2465,19 +2979,19 @@ function describeManagerModelError(error) {
     lowered.includes("timed out") ||
     lowered.includes("aborterror")
   ) {
-    return "经理层大模型响应超时，当前模型可能不可用、网络不稳，或这把 key 没有匹配到合适的模型资源包。";
+    return "经理层大模型响应超时：当前模型可能不可用、网络不稳，或这把 key 没有匹配到合适的模型资源包。";
   }
 
   if (lowered.includes("insufficient_quota")) {
-    return "经理层大模型暂时不可用，当前 API 额度不足。";
+    return "经理层大模型不可用：当前 API 额度不足。";
   }
 
   if (lowered.includes("invalid_api_key")) {
-    return "经理层大模型暂时不可用，当前 API Key 无效。";
+    return "经理层大模型不可用：当前 API Key 无效。";
   }
 
   if (lowered.includes("rate_limit") || lowered.includes("429")) {
-    return "经理层大模型暂时不可用，当前请求过于频繁。";
+    return "经理层大模型不可用：当前请求过于频繁。";
   }
 
   if (
@@ -2492,18 +3006,18 @@ function describeManagerModelError(error) {
     lowered.includes("适用于glm") ||
     lowered.includes("model not found")
   ) {
-    return "经理层大模型暂时不可用，当前模型可能没有开通，或不在这把 key 的可用资源包内。";
+    return "经理层大模型不可用：当前模型可能没有开通，或不在这把 key 的可用资源包内。";
   }
 
   if (lowered.includes("401") || lowered.includes("unauthorized")) {
-    return "经理层大模型暂时不可用，当前鉴权失败。";
+    return "经理层大模型不可用：当前鉴权失败。";
   }
 
   if (lowered.includes("403") || lowered.includes("permission")) {
-    return "经理层大模型暂时不可用，当前权限不足。";
+    return "经理层大模型不可用：当前权限不足。";
   }
 
-  return "经理层大模型暂时不可用，我先回退到本地摘要继续工作。";
+  return "经理层大模型不可用：请求没有成功完成。";
 }
 
 async function runLocalManager(text) {
@@ -2624,6 +3138,37 @@ async function runLocalManager(text) {
         result.output.currentTask?.title || result.output.agent.currentTaskTitle || "暂无明确任务";
       return {
         text: `已切到和 ${directChatIntent.matches[0].name} 的直连对话。当前他正在处理“${taskTitle}”。`,
+        action: result.clientAction,
+      };
+    }
+  }
+
+  if (isResourceDetailQuestion(text)) {
+    const workspaceRef = extractWorkspaceReference(text);
+    const result = await getResourceStatusTool({
+      resource_ref: text,
+      employee_ref: mentionedAgent?.name || "",
+      workspace_ref: workspaceRef || "",
+    });
+
+    if (result.output?.ok) {
+      return {
+        text: formatResourceDetailReply(result.output.resource, result.output.excerpt),
+        action: result.clientAction,
+      };
+    }
+  }
+
+  if (isResourceListQuestion(text)) {
+    const workspaceRef = extractWorkspaceReference(text);
+    const result = await listResourcesTool({
+      employee_ref: mentionedAgent?.name || "",
+      workspace_ref: workspaceRef || "",
+    });
+
+    if (result.output?.ok) {
+      return {
+        text: formatResourceListReply(result.output.resources || []),
         action: result.clientAction,
       };
     }
@@ -2750,7 +3295,7 @@ async function runLocalManager(text) {
     }
   }
 
-  if (/(员工|agent|谁在线|有哪些)/i.test(text)) {
+  if (isEmployeeRosterQuestion(text)) {
     return {
       text: formatEmployeeListReply(snapshot),
       action: null,
@@ -2794,24 +3339,11 @@ async function runLocalManager(text) {
 }
 
 async function runManager(text) {
-  const snapshot = buildSnapshot();
-
-  if (shouldPreferDeterministicManagerFlow(text, snapshot)) {
-    return runLocalManager(text);
-  }
-
   if (MANAGER_PROVIDER === "openai") {
     try {
       return await runOpenAIManager(text);
     } catch (error) {
-      const fallback = await runLocalManager(text);
-      return {
-        text: [
-          `${describeManagerModelError(error)} 已自动回退到本地摘要。`,
-          fallback.text,
-        ].join("\n\n"),
-        action: fallback.action || null,
-      };
+      throw new Error(describeManagerModelError(error));
     }
   }
 
@@ -2819,15 +3351,12 @@ async function runManager(text) {
     try {
       return await runCompatibleChatManager(text);
     } catch (error) {
-      const fallback = await runLocalManager(text);
-      return {
-        text: [
-          `${describeManagerModelError(error)} 已自动回退到本地摘要。`,
-          fallback.text,
-        ].join("\n\n"),
-        action: fallback.action || null,
-      };
+      throw new Error(describeManagerModelError(error));
     }
+  }
+
+  if (MANAGER_PROVIDER !== "local") {
+    throw new Error(`经理层模型配置不支持：${MANAGER_PROVIDER || "未配置"}`);
   }
 
   return runLocalManager(text);
@@ -2841,7 +3370,7 @@ function enqueueManagerTask(task) {
   return nextTask;
 }
 
-app.use(express.json());
+app.use(express.json({ limit: "4mb" }));
 app.use(
   express.static(join(__dirname, "..", "public"), {
     setHeaders(response) {
@@ -2883,15 +3412,22 @@ app.get("/api/state", (request, response) => {
 
 // HTTP fallback for environments where WebSocket is not available
 app.post("/api/manager-message", async (request, response) => {
-  if (!isExpectedToken(APP_TOKEN, readBearerToken(request))) {
-    response.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  const clientRole = requireHttpAuth(request, response, {
+    allowApp: true,
+    message: "发送给 AI经理 的消息需要有效的 APP_TOKEN",
+  });
+  if (!clientRole) {
     return;
   }
 
   const text = normalizeText(request.body?.text);
   const clientMessageId = normalizeText(request.body?.clientMessageId);
   if (!text) {
-    response.status(400).json({ ok: false, error: "text is required" });
+    response.status(400).json({
+      ok: false,
+      error: "EMPTY_MANAGER_MESSAGE",
+      message: "发送给 AI经理 的消息不能为空",
+    });
     return;
   }
 
@@ -2930,13 +3466,280 @@ app.post("/api/manager-message", async (request, response) => {
     } catch (error) {
       await store.updateManagerMessage(userMessage.id, {
         status: "failed",
-        errorMessage: error?.message || String(error),
+        failedAt: new Date().toISOString(),
+        errorMessage: error.message || "AI经理 暂时不可用",
+      });
+      await store.addManagerMessage({
+        id: randomUUID(),
+        role: "assistant",
+        text: `经理层模型请求失败：${error.message || "未知错误"}`,
+        createdAt: new Date().toISOString(),
       });
       broadcastSnapshot();
     }
   });
 
   response.json({ ok: true, messageId: userMessage.id });
+});
+
+app.post("/api/direct-message", async (request, response) => {
+  const clientRole = requireHttpAuth(request, response, {
+    allowApp: true,
+    message: "发送直连消息需要有效的 APP_TOKEN",
+  });
+  if (!clientRole) {
+    return;
+  }
+
+  try {
+    const requestedConversationId = normalizeText(request.body?.conversationId);
+    const requestedAgentId = normalizeText(request.body?.agentId);
+    const clientMessageId = normalizeText(request.body?.clientMessageId) || randomUUID();
+    const noteText = normalizeText(request.body?.text);
+    const rawFiles = Array.isArray(request.body?.files) ? request.body.files : [];
+
+    let conversation = requestedConversationId
+      ? store.getConversation(requestedConversationId)
+      : null;
+    const agentId = requestedAgentId || conversation?.agentId || null;
+
+    if (!agentId) {
+      response.status(400).json({
+        ok: false,
+        error: "AGENT_REQUIRED",
+        message: "上传文本资源需要 agentId 或 conversationId。",
+      });
+      return;
+    }
+
+    if (!noteText && rawFiles.length === 0) {
+      response.status(400).json({
+        ok: false,
+        error: "EMPTY_MESSAGE",
+        message: "请至少输入一条消息，或上传一个文本文件。",
+      });
+      return;
+    }
+
+    if (rawFiles.length > MAX_TEXT_RESOURCE_FILES) {
+      response.status(400).json({
+        ok: false,
+        error: "TOO_MANY_FILES",
+        message: `单次最多上传 ${MAX_TEXT_RESOURCE_FILES} 个文本文件。`,
+      });
+      return;
+    }
+
+    conversation = await ensureConversationForEmployeeTask({
+      agentId,
+      text: noteText || "文本资源上传",
+      requestedConversationId,
+      title: noteText || normalizeText(rawFiles[0]?.name) || null,
+      workspaceId: normalizeText(request.body?.workspaceId) || conversation?.workspaceId || null,
+    });
+
+    const normalizedFiles = [];
+    for (const [index, file] of rawFiles.entries()) {
+      const fileName = normalizeText(file?.name) || `text-resource-${index + 1}.txt`;
+      const mime = normalizeText(file?.mime) || "text/plain";
+      const fileText = String(file?.text || "");
+      const size = Buffer.byteLength(fileText, "utf8");
+
+      if (!isTextLikeMime(mime)) {
+        response.status(400).json({
+          ok: false,
+          error: "UNSUPPORTED_FILE_TYPE",
+          message: `${fileName} 不是支持的文本文件。`,
+        });
+        return;
+      }
+
+      if (size > MAX_TEXT_RESOURCE_BYTES) {
+        response.status(400).json({
+          ok: false,
+          error: "FILE_TOO_LARGE",
+          message: `${fileName} 超过单文件大小限制（${Math.round(
+            MAX_TEXT_RESOURCE_BYTES / 1024
+          )} KB）。`,
+        });
+        return;
+      }
+      normalizedFiles.push({
+        name: fileName,
+        mime,
+        text: fileText,
+      });
+    }
+
+    const createdResources = [];
+    for (const file of normalizedFiles) {
+      const resource = await store.createTextResource({
+        name: file.name,
+        mime: file.mime,
+        text: file.text,
+        uploadedBy: clientRole,
+        sourceConversationId: conversation.id,
+        workspaceId: conversation.workspaceId || null,
+        tags: inferTextResourceTags(file.name, file.mime),
+      });
+      createdResources.push(resource);
+    }
+
+    const messageText =
+      noteText ||
+      (createdResources.length === 1
+        ? `我上传了一个文本文件《${createdResources[0].name}》，请先查看附件。`
+        : `我上传了 ${createdResources.length} 个文本文件，请先查看附件。`);
+
+    const result = await submitUserTaskToEmployee({
+      agentId,
+      text: messageText,
+      requestedConversationId: conversation.id,
+      clientMessageId,
+      requestedBy: "human",
+      attachments: createdResources.map((resource) => buildResourceAttachment(resource)),
+    });
+    broadcastSnapshot();
+
+    response.json({
+      ok: true,
+      conversationId: result.conversation.id,
+      messageId: result.message.id,
+      taskId: result.task?.id || null,
+      attachments: result.message.attachments || [],
+    });
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      error: "DIRECT_MESSAGE_UPLOAD_FAILED",
+      message: error.message || "文本资源上传失败",
+    });
+  }
+});
+
+app.get("/api/resources", (request, response) => {
+  const clientRole = requireHttpAuth(request, response, {
+    allowApp: true,
+    allowAgent: true,
+    message: "读取资源列表需要有效的访问令牌",
+  });
+  if (!clientRole) {
+    return;
+  }
+
+  const snapshot = buildSnapshot();
+  const filtered = filterResourcesForManager(snapshot, {
+    resourceRef: request.query.q,
+    employeeRef: request.query.employeeRef,
+    taskRef: request.query.taskRef,
+    workspaceRef: request.query.workspaceRef,
+    status: request.query.status,
+    tag: request.query.tag,
+  });
+
+  if (!filtered.ok) {
+    response.status(400).json({
+      ok: false,
+      error: filtered.error || "RESOURCE_FILTER_FAILED",
+      message: filtered.message || "资源过滤失败",
+      matches: filtered.matches || [],
+    });
+    return;
+  }
+
+  response.set("Cache-Control", "no-store");
+  response.json({
+    ok: true,
+    resources: filtered.resources,
+    total: filtered.resources.length,
+  });
+});
+
+app.get("/api/resources/:resourceId", (request, response) => {
+  const clientRole = requireHttpAuth(request, response, {
+    allowApp: true,
+    allowAgent: true,
+    message: "读取资源需要有效的访问令牌",
+  });
+  if (!clientRole) {
+    return;
+  }
+
+  const snapshot = buildSnapshot();
+  const resource = (snapshot.resources || []).find(
+    (entry) => entry.id === normalizeText(request.params.resourceId)
+  );
+  if (!resource) {
+    response.status(404).json({
+      ok: false,
+      error: "RESOURCE_NOT_FOUND",
+      message: "没有找到这个资源。",
+    });
+    return;
+  }
+
+  response.set("Cache-Control", "no-store");
+  response.json({
+    ok: true,
+    resource,
+  });
+});
+
+app.get("/api/resources/:resourceId/content", async (request, response) => {
+  const clientRole = requireHttpAuth(request, response, {
+    allowApp: true,
+    allowAgent: true,
+    message: "读取资源正文需要有效的访问令牌",
+  });
+  if (!clientRole) {
+    return;
+  }
+
+  try {
+    const result = await store.readTextResourceSlice(
+      normalizeText(request.params.resourceId),
+      {
+        mode: normalizeText(request.query.mode),
+        limitLines: request.query.limitLines,
+        startLine: request.query.startLine,
+        endLine: request.query.endLine,
+        query: request.query.query,
+        maxHits: request.query.maxHits,
+      }
+    );
+
+    if (!result) {
+      response.status(404).json({
+        ok: false,
+        error: "RESOURCE_NOT_FOUND",
+        message: "没有找到这个资源。",
+      });
+      return;
+    }
+
+    response.set("Cache-Control", "no-store");
+    const snapshot = buildSnapshot();
+    const resource = (snapshot.resources || []).find(
+      (entry) => entry.id === normalizeText(request.params.resourceId)
+    );
+    response.json({
+      ok: true,
+      resource: resource || buildResourceAttachment(result.resource),
+      mode: result.mode,
+      totalLineCount: result.totalLineCount,
+      startLine: result.startLine || null,
+      endLine: result.endLine || null,
+      query: result.query || null,
+      hits: result.hits || [],
+      content: result.content,
+    });
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      error: "RESOURCE_READ_FAILED",
+      message: error.message || "读取资源内容失败",
+    });
+  }
 });
 
 wss.on("connection", (socket) => {
@@ -3212,7 +4015,7 @@ wss.on("connection", (socket) => {
             await store.addManagerMessage({
               id: randomUUID(),
               role: "assistant",
-              text: `AI经理 这次没能完成处理：${error.message || "未知错误"}`,
+              text: `经理层模型请求失败：${error.message || "未知错误"}`,
               createdAt: new Date().toISOString(),
             });
             broadcastSnapshot();

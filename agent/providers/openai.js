@@ -26,7 +26,15 @@ export function createOpenAIRuntime({ apiKey, model = "gpt-5", systemPrompt = ""
     async getRegistrationContext() {
       return {};
     },
-    async reply({ conversation }) {
+    async reply({ conversation, message }) {
+      const activeConversation = message?.composedText
+        ? {
+            ...conversation,
+            messages: (conversation.messages || []).map((item) =>
+              item?.id === message.id ? { ...item, text: message.composedText } : item
+            ),
+          }
+        : conversation;
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
@@ -36,7 +44,7 @@ export function createOpenAIRuntime({ apiKey, model = "gpt-5", systemPrompt = ""
         body: JSON.stringify({
           model,
           input: toOpenAIInput({
-            conversation,
+            conversation: activeConversation,
             systemPrompt,
           }),
         }),

@@ -387,7 +387,8 @@ small {
 .primary-link-button,
 .primary-btn,
 .manager-action-button,
-.directory-primary-button {
+.directory-primary-button,
+.message-jump-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -408,7 +409,8 @@ small {
 .primary-link-button:hover,
 .primary-btn:hover,
 .manager-action-button:hover,
-.directory-primary-button:hover {
+.directory-primary-button:hover,
+.message-jump-button:hover {
   transform: translateY(-1px);
   box-shadow:
     0 18px 40px rgba(79, 141, 255, 0.2),
@@ -738,6 +740,7 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .message.user {
@@ -751,11 +754,13 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
 
 .bubble {
   max-width: min(720px, 86%);
+  min-width: 0;
   padding: 18px 20px;
   border-radius: 26px;
   border: 1px solid var(--line);
   background: var(--surface-strong);
   box-shadow: var(--shadow-sm);
+  overflow-wrap: anywhere;
 }
 
 .message.user .bubble {
@@ -819,6 +824,94 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.65;
+}
+
+.message-attachments {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.resource-card {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.68);
+  overflow: hidden;
+}
+
+.resource-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  font-size: 0.92rem;
+}
+
+.resource-card-head strong {
+  min-width: 0;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.resource-card-head span,
+.resource-card-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.resource-card-head span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.resource-card-meta {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.resource-card-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.resource-card-preview {
+  margin-top: 10px;
+  max-width: 100%;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(245, 247, 250, 0.92);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.resource-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.resource-card-link {
+  max-width: 100%;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 0.84rem;
+  white-space: nowrap;
 }
 
 .message-note.error,
@@ -925,6 +1018,50 @@ body.direct-home .floating-composer > * {
   z-index: 1;
 }
 
+.composer-resource-row {
+  display: grid;
+  gap: 8px;
+}
+
+.composer-upload-error {
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
+.pending-resource-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pending-resource-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.pending-resource-copy strong {
+  font-size: 0.9rem;
+}
+
+.pending-resource-copy span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.pending-resource-remove {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(18, 23, 34, 0.06);
+  color: var(--text);
+  font-weight: 600;
+}
+
 .manager-composer,
 .chat-composer {
   position: absolute;
@@ -958,6 +1095,13 @@ body.direct-home .composer textarea {
   line-height: 1.5;
 }
 
+.composer-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .composer textarea::placeholder,
 .directory-field input::placeholder,
 .note-field textarea::placeholder,
@@ -968,6 +1112,16 @@ body.direct-home .composer textarea {
 .composer button {
   justify-self: end;
   min-width: 138px;
+}
+
+.secondary-button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(18, 23, 34, 0.06);
+  color: var(--text);
+  font-weight: 700;
 }
 
 .manager-composer button,
@@ -995,6 +1149,39 @@ body.direct-home .soft-context-bar {
 .jump-card-stack {
   display: grid;
   gap: 14px;
+}
+
+.resource-content-sheet {
+  display: grid;
+  gap: 12px;
+}
+
+.resource-content-block {
+  overflow: auto;
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(247, 249, 253, 0.92);
+  color: var(--text-soft);
+  font-size: 0.88rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(52vh, 720px);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.resource-content-block::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.resource-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .soft-sheet,
@@ -1390,12 +1577,13 @@ body.direct-home .soft-context-bar {
   right: 18px;
   bottom: calc(var(--overlay-bottom-offset) + var(--overlay-bottom-gap) + 18px);
   z-index: 2;
-  min-height: 44px;
-  padding: 0 16px;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(135deg, rgba(79, 141, 255, 0.92), rgba(110, 115, 255, 0.92));
-  color: white;
-  box-shadow: 0 14px 30px rgba(79, 141, 255, 0.24);
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  box-shadow:
+    0 12px 24px rgba(79, 141, 255, 0.16),
+    0 14px 30px rgba(110, 115, 255, 0.12);
 }
 
 .commander-shell {

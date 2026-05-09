@@ -73,6 +73,43 @@ export function formatWorkspaceListReply(snapshot) {
     .join("\n");
 }
 
+export function formatResourceListReply(resources) {
+  if (!Array.isArray(resources) || resources.length === 0) {
+    return "当前没有匹配到资源。";
+  }
+
+  return resources
+    .slice(0, 8)
+    .map((resource) => {
+      const taskLabel = resource.primaryTaskTitle ? `，关联任务 ${resource.primaryTaskTitle}` : "";
+      const workspaceLabel = resource.workspaceName ? `，工作区 ${resource.workspaceName}` : "";
+      const lineLabel = resource.lineCount ? `，${resource.lineCount} 行` : "";
+      return `${resource.name}（${resource.statusLabel}${workspaceLabel}${taskLabel}${lineLabel}）`;
+    })
+    .join("\n");
+}
+
+export function formatResourceDetailReply(resource, excerpt = "") {
+  if (!resource) {
+    return "当前没有找到这份资源。";
+  }
+
+  const taskLabel = resource.primaryTaskTitle ? `关联任务是“${resource.primaryTaskTitle}”。` : "";
+  const workspaceLabel = resource.workspaceName ? `工作区是 ${resource.workspaceName}。` : "";
+  const previewLabel = normalizeText(resource.summary || resource.previewText || "");
+  const excerptLabel = normalizeText(excerpt);
+
+  return [
+    `${resource.name} 当前状态是 ${resource.statusLabel}，大小 ${resource.size || 0} 字节，约 ${resource.lineCount || 0} 行。`,
+    taskLabel,
+    workspaceLabel,
+    previewLabel ? `摘要：${previewLabel}` : "",
+    excerptLabel ? `正文摘录：\n${excerptLabel}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function formatApprovalListReply(snapshot) {
   const pendingApprovals = (snapshot.approvals || []).filter(
     (approval) => approval.status === "pending"

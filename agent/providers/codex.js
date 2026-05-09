@@ -15,7 +15,7 @@ function buildCodexNewSessionPrompt({ conversation, message, systemPrompt }) {
     "只输出最终要发送给用户的正文，不要加解释，不要加前缀。",
     "",
     "当前用户最新消息：",
-    message.text,
+    message.composedText || message.text,
     "",
     "对话历史：",
     transcript,
@@ -29,7 +29,7 @@ function buildCodexResumePrompt(message) {
     "继续处理这个手机聊天线程里的新消息。",
     "请用中文直接回复用户，不要加前缀，不要解释你正在使用 Codex。",
     "",
-    message.text,
+    message.composedText || message.text,
   ].join("\n");
 }
 

@@ -5,6 +5,7 @@ const HUB_WS_URL = HUB_ORIGIN.replace(/^http/, "ws") + "/ws";
 const APP_TOKEN = process.env.APP_TOKEN || "";
 const TEST_TEXT =
   process.env.TEST_TEXT || `smoke delegation ${Math.random().toString(36).slice(2, 8)}`;
+const MANAGER_CLIENT_MESSAGE_ID = `manager-smoke-${Math.random().toString(36).slice(2, 10)}`;
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || 15000);
 const DEBUG = process.env.DEBUG_MANAGER_SMOKE === "1";
 
@@ -80,14 +81,30 @@ async function main() {
     JSON.stringify({
       type: "manager_message",
       text: managerText,
+      clientMessageId: MANAGER_CLIENT_MESSAGE_ID,
     })
   );
   debugLog("sent manager message", managerText);
 
   await waitForState((snapshot) => {
-    const assistantMessage = [...(snapshot.manager?.messages || [])]
-      .reverse()
-      .find((item) => item.role === "assistant" && String(item.text || "").includes(TEST_TEXT));
+    const managerMessages = snapshot.manager?.messages || [];
+    const userMessage = managerMessages.find(
+      (item) => item.clientMessageId === MANAGER_CLIENT_MESSAGE_ID
+    );
+    const userCreatedAt = userMessage ? new Date(userMessage.createdAt).getTime() : 0;
+    const assistantMessage = managerMessages.find((item) => {
+      if (item.role !== "assistant" || String(item.text || "").includes("失败")) {
+        return false;
+      }
+
+      const assistantCreatedAt = new Date(item.createdAt).getTime();
+      return (
+        !userMessage ||
+        !Number.isFinite(userCreatedAt) ||
+        !Number.isFinite(assistantCreatedAt) ||
+        assistantCreatedAt >= userCreatedAt - 1000
+      );
+    });
     const delegatedTask = (snapshot.tasks || []).find(
       (task) =>
         task.agentId === onlineAgent.id &&
@@ -105,7 +122,15 @@ async function main() {
     );
     debugLog("poll", {
       managerCount: snapshot.manager?.messages?.length || 0,
+      hasUserMessage: Boolean(userMessage),
       hasAssistant: Boolean(assistantMessage),
+      assistantText: assistantMessage ? String(assistantMessage.text || "").slice(0, 120) : "",
+      managerMessages: managerMessages.slice(-4).map((message) => ({
+        role: message.role,
+        status: message.status || "",
+        createdAt: message.createdAt,
+        text: String(message.text || "").slice(0, 80),
+      })),
       hasTask: Boolean(delegatedTask),
       hasConversation: Boolean(delegatedConversation),
     });

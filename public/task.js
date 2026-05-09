@@ -42,6 +42,7 @@ const taskStatusBadges = document.querySelector("#task-status-badges");
 const taskGoal = document.querySelector("#task-goal");
 const taskProgress = document.querySelector("#task-progress");
 const taskContextGrid = document.querySelector("#task-context-grid");
+const taskResourceList = document.querySelector("#task-resource-list");
 const taskApprovalList = document.querySelector("#task-approval-list");
 const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
@@ -393,6 +394,32 @@ function buildApprovalHref(task, approval) {
   return `/approval.html?${params.toString()}`;
 }
 
+function buildResourceHref(resource, task, conversation, agent, deviceName) {
+  if (!resource?.id) {
+    return "";
+  }
+
+  const params = new URLSearchParams();
+  params.set("resourceId", resource.id);
+  if (task?.id) {
+    params.set("taskId", task.id);
+  }
+  if (conversation?.id || task?.conversationId || route.conversationId) {
+    params.set("conversationId", conversation?.id || task?.conversationId || route.conversationId);
+  }
+  if (agent?.id || task?.agentId || route.agentId) {
+    params.set("agentId", agent?.id || task?.agentId || route.agentId);
+  }
+  if (agent?.name || task?.agentName || route.agentName) {
+    params.set("agentName", agent?.name || task?.agentName || route.agentName);
+  }
+  if (deviceName) {
+    params.set("deviceName", deviceName);
+  }
+
+  return `/resource.html?${params.toString()}`;
+}
+
 function renderStatusBadges(task, agent, workspace) {
   const badges = [
     {
@@ -500,6 +527,59 @@ function renderActionCard(task, conversation, agent, workspace, approvals) {
   `;
 }
 
+function renderTaskResources(snapshot, task, conversation, agent, deviceName) {
+  if (!taskResourceList) {
+    return;
+  }
+
+  if (!task?.id) {
+    taskResourceList.innerHTML = "";
+    return;
+  }
+
+  const resources = (snapshot.resources || []).filter((resource) =>
+    (resource.linkedTaskIds || []).includes(task.id)
+  );
+
+  if (resources.length === 0) {
+    taskResourceList.innerHTML = `
+      <article class="task-jump-card">
+        <div class="task-jump-copy">
+          <strong>当前还没有挂载资源</strong>
+          <p>如果后面上传日志、文档或配置文件，我会把它们挂到这条任务下，方便继续追查。</p>
+        </div>
+      </article>
+    `;
+    return;
+  }
+
+  taskResourceList.innerHTML = resources
+    .slice(0, 8)
+    .map((resource) => {
+      const href = buildResourceHref(resource, task, conversation, agent, deviceName);
+      return `
+        <article class="task-jump-card resource-jump-card">
+          <div class="task-jump-copy">
+            <strong>${escapeHtml(resource.name)}</strong>
+            <p>${escapeHtml(
+              `${resource.statusLabel || resource.status || "未知状态"} · ${resource.lineCount || 0} 行${
+                resource.workspaceName ? ` · ${resource.workspaceName}` : ""
+              }`
+            )}</p>
+          </div>
+          <div class="actions">
+            ${
+              href
+                ? `<a class="primary-btn" href="${escapeHtml(href)}">查看资源</a>`
+                : ""
+            }
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderTaskView(task, conversation, agent, workspace, approvals) {
   if (!task) {
     taskPageSubtitle.textContent = "当前链接没有找到对应任务。";
@@ -511,6 +591,9 @@ function renderTaskView(task, conversation, agent, workspace, approvals) {
     taskProgress.textContent = "任务详情为空时，不建议直接跳员工直连，以免打断错误对象。";
     taskStatusBadges.innerHTML = "";
     taskContextGrid.innerHTML = "";
+    if (taskResourceList) {
+      taskResourceList.innerHTML = "";
+    }
     taskApprovalList.innerHTML = renderActionCard(null, null, null, null, []);
     return;
   }
@@ -563,6 +646,7 @@ function renderTaskView(task, conversation, agent, workspace, approvals) {
     )
     .join("");
 
+  renderTaskResources(getSnapshot(), task, conversation, agent, resolvedDeviceName);
   taskApprovalList.innerHTML = renderActionCard(task, conversation, agent, workspace, approvals);
 }
 

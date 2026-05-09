@@ -1,35 +1,20 @@
-<svg width="246.153" height="246.153" viewBox="132.923 132.924 246.153 246.153" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <g transform="translate(249.575 262.425)">
-    <g transform="rotate(15)">
-      <g transform="rotate(-90)">
-        <path
-          d="M-36 112L0 28L36 112"
-          stroke="#3B82FF"
-          stroke-width="24"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </g>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cool-bg" x1="144" y1="112" x2="880" y2="912" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F62FE" />
+      <stop offset="1" stop-color="#7C3AED" />
+    </linearGradient>
+    <path id="spark-chevron" d="M414 324L512 466L610 324" />
+  </defs>
 
-      <g transform="rotate(30)">
-        <path
-          d="M-36 112L0 28L36 112"
-          stroke="#3B82FF"
-          stroke-width="24"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </g>
+  <rect width="1024" height="1024" rx="225" fill="url(#cool-bg)" />
+  <rect width="1024" height="1024" rx="225" stroke="white" stroke-opacity="0.34" stroke-width="2" />
 
-      <g transform="rotate(150)">
-        <path
-          d="M-36 112L0 28L36 112"
-          stroke="#3B82FF"
-          stroke-width="24"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </g>
+  <g transform="translate(512 512) scale(1.38) translate(-512 -512)">
+    <g stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+      <use href="#spark-chevron" />
+      <use href="#spark-chevron" transform="rotate(120 512 512)" />
+      <use href="#spark-chevron" transform="rotate(240 512 512)" />
     </g>
   </g>
 </svg>

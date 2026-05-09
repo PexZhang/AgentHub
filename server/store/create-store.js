@@ -23,6 +23,9 @@ export function createStoreFromEnv(options = {}) {
   const snapshotManagerMessageLimit = options.snapshotManagerMessageLimit;
   const managerProvider = options.managerProvider;
   const managerModel = options.managerModel;
+  const defaultDataDir = join(__dirname, "..", "..", "data");
+  const resourceDir =
+    normalizeText(env.RESOURCE_STORAGE_DIR) || join(defaultDataDir, "resources");
 
   if (storeDriver === "postgres") {
     const connectionString = normalizeText(env.DATABASE_URL);
@@ -39,15 +42,16 @@ export function createStoreFromEnv(options = {}) {
       snapshotManagerMessageLimit,
       managerProvider,
       managerModel,
+      resourceDir,
     });
   }
 
   return new JsonStore({
-    filePath:
-      normalizeText(env.DATA_FILE) || join(__dirname, "..", "..", "data", "state.json"),
+    filePath: normalizeText(env.DATA_FILE) || join(defaultDataDir, "state.json"),
     snapshotConversationMessageLimit,
     snapshotManagerMessageLimit,
     managerProvider,
     managerModel,
+    resourceDir,
   });
 }

@@ -14,6 +14,7 @@ In this product model:
 - `Digital Employee` is an addressable agent instance with a name, capability set, and execution context
 - `Conversation` is the human-facing thread
 - `Run / Task` is the machine-facing unit of work
+- `Resource` is a durable input or output object referenced by conversations and tasks
 
 The key idea is that one machine may host multiple digital employees at the same time, for example `codex-dev`, `claude-review`, and `ops-agent`.
 
@@ -111,6 +112,8 @@ Human chat is not enough for multi-agent work. We also need task-level coordinat
 Conversations are for communication.
 Tasks are for execution.
 These should be related but not collapsed into the same model.
+Resources are for durable materials.
+They should be referenced from conversation and task state instead of being dumped into long chat transcripts by default.
 
 ### 5. Human Manager Console
 
@@ -179,6 +182,32 @@ The system should eventually make it easy for an agent to answer:
 - which workspace am I operating in?
 - what blocked me?
 - who should I hand off to?
+- which resources are attached to this task?
+- how do I read only the useful slice of a large text resource?
+
+## Resource Model
+
+AgentHub should treat uploaded files as first-class `Resource` objects, not as oversized message bodies.
+
+First version rules:
+
+- `Conversation` may reference resources through `message.attachments`
+- `Task` may reference resources through task-resource links
+- resource metadata belongs in persisted state
+- large text bodies belong in Hub-managed storage, not directly in conversation text
+- agents should read resource excerpts or slices on demand instead of always receiving the full body
+- resource lifecycle should be explicit:
+  - `in_use`: still linked to an active task or visible conversation
+  - `archived`: no active task, but still has durable history references
+  - `orphaned`: task and conversation links have disappeared, waiting for later cleanup policy
+
+Governance expectations:
+
+- manager tools should be able to list and inspect resources by employee / task / workspace
+- task detail and direct chat should drill down to the same resource detail object
+- resource cleanup should be a second-step lifecycle, not an automatic side effect of deleting one chat thread
+
+This keeps the human UI thin while making the execution layer more usable for agents.
 
 ### Docs Live in the Repo
 

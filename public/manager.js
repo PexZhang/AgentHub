@@ -362,7 +362,7 @@ function flushManagerLocalOutbox() {
   const flushed = flushLocalOutboxMessages(state.localOutbox, {
     send(message) {
       if (_pollingMode) {
-        _sendManagerMessageViaHTTP(message.text);
+        _sendManagerMessageViaHTTP(message.text, message.clientMessageId);
         return true;
       }
       if (!state.socket || state.socket.readyState !== 1) {
@@ -398,7 +398,15 @@ function updateManagerSendButtonState() {
     queueFull;
 }
 
-async function _sendManagerMessageViaHTTP(text) {
+function createManagerClientMessageId() {
+  if (globalThis.crypto?.randomUUID) {
+    return `client-${globalThis.crypto.randomUUID()}`;
+  }
+
+  return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function _sendManagerMessageViaHTTP(text, clientMessageId = createManagerClientMessageId()) {
   try {
     const resp = await fetch("/api/manager-message", {
       method: "POST",
@@ -408,7 +416,7 @@ async function _sendManagerMessageViaHTTP(text) {
       },
       body: JSON.stringify({
         text,
-        clientMessageId: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
+        clientMessageId,
       }),
     });
     if (!resp.ok) {
@@ -602,6 +610,31 @@ function buildActionHref(action) {
     return `/employee.html?${params.toString()}`;
   }
 
+  if (action.type === "open_resource_detail") {
+    if (!action.resourceId) {
+      return null;
+    }
+
+    params.set("resourceId", action.resourceId);
+    if (action.taskId) {
+      params.set("taskId", action.taskId);
+    }
+    if (action.conversationId) {
+      params.set("conversationId", action.conversationId);
+    }
+    if (action.agentId) {
+      params.set("agentId", action.agentId);
+    }
+    if (action.agentName) {
+      params.set("agentName", action.agentName);
+    }
+    if (action.deviceName) {
+      params.set("deviceName", action.deviceName);
+    }
+
+    return `/resource.html?${params.toString()}`;
+  }
+
   return null;
 }
 
@@ -623,12 +656,16 @@ function renderManagerActionCard(action) {
     action.title ||
     (action.type === "open_task_detail"
       ? "查看任务详情"
-      : `查看 ${action.agentName || action.agentId} 的执行细节`);
+      : action.type === "open_resource_detail"
+        ? `查看 ${action.resourceName || action.resourceId} 的资源细节`
+        : `查看 ${action.agentName || action.agentId} 的执行细节`);
   const description =
     action.description ||
     (action.type === "open_task_detail"
       ? "先看任务状态、工作区和最近进展，再决定要不要直连员工。"
-      : "先查看这位员工的状态、线程和工作目录，再决定是否直接进入聊天。");
+      : action.type === "open_resource_detail"
+        ? "先看资源状态、关联任务和正文摘录，再决定是否继续追问。"
+        : "先查看这位员工的状态、线程和工作目录，再决定是否直接进入聊天。");
   const buttonLabel = action.label || "查看详情并跳转";
 
   return `

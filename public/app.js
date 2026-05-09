@@ -18,6 +18,25 @@ import {
 
 const UI_PREFS_KEY = "agenthub-ui-prefs-v3";
 const APP_TOKEN_STORAGE_KEY = "agenthub-app-token-v1";
+const MAX_DIRECT_TEXT_FILE_BYTES = 1024 * 1024;
+const SUPPORTED_TEXT_FILE_EXTENSIONS = [
+  ".txt",
+  ".md",
+  ".log",
+  ".json",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".js",
+  ".ts",
+  ".py",
+  ".java",
+  ".c",
+  ".cpp",
+  ".h",
+  ".ini",
+  ".cfg",
+];
 const launchParams = new URLSearchParams(window.location.search);
 const pageMode = document.body.dataset.page || "direct";
 
@@ -95,6 +114,9 @@ const state = {
   activeConversationId: null,
   pendingConversationId: null,
   directFocus: null,
+  pendingDirectResources: [],
+  directUploadPending: false,
+  directUploadError: "",
   ui: loadUiState(),
   messageViewport: {
     stickToBottom: true,
@@ -173,6 +195,9 @@ const messageToolbar = document.querySelector("#message-toolbar");
 const messagesNode = document.querySelector("#messages");
 const messageJumpButton = document.querySelector("#message-jump-button");
 const composer = document.querySelector("#composer");
+const resourceInput = document.querySelector("#resource-input");
+const resourcePickerButton = document.querySelector("#resource-picker-button");
+const composerResourceRow = document.querySelector("#composer-resource-row");
 const messageInput = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const directBackLink = document.querySelector("#direct-back-link");
@@ -316,6 +341,145 @@ function isMobileLayout() {
   return window.matchMedia("(max-width: 720px)").matches;
 }
 
+function formatFileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(value >= 10 * 1024 ? 0 : 1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildResourceHref(attachment, { conversation = null, agent = null, task = null, deviceName = "" } = {}) {
+  const resourceId = attachment?.resourceId || attachment?.id || null;
+  if (!resourceId) {
+    return "";
+  }
+
+  const params = new URLSearchParams();
+  params.set("resourceId", resourceId);
+
+  const taskId = attachment?.primaryTaskId || task?.id || null;
+  if (taskId) {
+    params.set("taskId", taskId);
+  }
+
+  const conversationId = attachment?.sourceConversationId || conversation?.id || null;
+  if (conversationId) {
+    params.set("conversationId", conversationId);
+  }
+
+  const agentId = attachment?.primaryAgentId || agent?.id || null;
+  if (agentId) {
+    params.set("agentId", agentId);
+  }
+
+  const agentName = attachment?.primaryAgentName || agent?.name || null;
+  if (agentName) {
+    params.set("agentName", agentName);
+  }
+
+  const resolvedDeviceName = deviceName || agent?.deviceName || "";
+  if (resolvedDeviceName) {
+    params.set("deviceName", resolvedDeviceName);
+  }
+
+  return `/resource.html?${params.toString()}`;
+}
+
+function isSupportedTextFile(file) {
+  const mime = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (
+    mime.startsWith("text/") ||
+    [
+      "application/json",
+      "application/xml",
+      "text/markdown",
+      "application/javascript",
+      "application/x-javascript",
+      "application/yaml",
+      "application/x-yaml",
+    ].includes(mime)
+  ) {
+    return true;
+  }
+
+  return SUPPORTED_TEXT_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function buildPendingResourcePreview(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const lines = normalized.split(/\r\n|\r|\n/u).slice(0, 4);
+  const preview = lines.join("\n");
+  return preview.length <= 180 ? preview : `${preview.slice(0, 180)}…`;
+}
+
+function renderComposerResources() {
+  if (!composerResourceRow) {
+    return;
+  }
+
+  const hasResources = state.pendingDirectResources.length > 0;
+  const hasError = Boolean(state.directUploadError);
+  composerResourceRow.hidden = !hasResources && !hasError;
+
+  if (!hasResources && !hasError) {
+    composerResourceRow.innerHTML = "";
+    syncDirectOverlayOffsets();
+    return;
+  }
+
+  const errorMarkup = hasError
+    ? `<div class="composer-upload-error">${escapeHtml(state.directUploadError)}</div>`
+    : "";
+  const resourceMarkup = hasResources
+    ? state.pendingDirectResources
+        .map(
+          (resource) => `
+            <article class="pending-resource-card">
+              <div class="pending-resource-copy">
+                <strong>${escapeHtml(resource.name)}</strong>
+                <span>${escapeHtml(formatFileSize(resource.size))} · ${escapeHtml(
+                  `${resource.lineCount} 行`
+                )}</span>
+              </div>
+              <button
+                type="button"
+                class="pending-resource-remove"
+                data-remove-resource-id="${escapeHtml(resource.id)}"
+              >
+                移除
+              </button>
+            </article>
+          `
+        )
+        .join("")
+    : "";
+
+  composerResourceRow.innerHTML = `${errorMarkup}${resourceMarkup}`;
+  composerResourceRow.querySelectorAll("[data-remove-resource-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.pendingDirectResources = state.pendingDirectResources.filter(
+        (resource) => resource.id !== button.dataset.removeResourceId
+      );
+      state.directUploadError = "";
+      renderComposerResources();
+      updateSendButtonState();
+    });
+  });
+  syncDirectOverlayOffsets();
+}
+
 function updateSendButtonState() {
   if (!sendButton) {
     return;
@@ -324,8 +488,14 @@ function updateSendButtonState() {
   const queueFull =
     !state.connected &&
     countActiveLocalOutboxMessages(state.localDirectOutbox) >= LOCAL_OUTBOX_MAX_MESSAGES;
+  const hasText = Boolean(messageInput?.value.trim());
+  const hasResources = state.pendingDirectResources.length > 0;
   sendButton.disabled =
-    state.auth.blocked || !state.activeAgentId || !messageInput?.value.trim() || queueFull;
+    state.auth.blocked ||
+    !state.activeAgentId ||
+    state.directUploadPending ||
+    (!hasText && !hasResources) ||
+    (!hasResources && queueFull);
 }
 
 function updateManagerSendButtonState() {
@@ -502,11 +672,94 @@ function flushDirectLocalOutbox() {
   }
 }
 
-function submitDirectMessage() {
+async function submitDirectResourceMessage() {
+  if (!state.activeAgentId || state.pendingDirectResources.length === 0) {
+    return false;
+  }
+
+  state.directUploadPending = true;
+  state.directUploadError = "";
+  updateSendButtonState();
+  renderComposerResources();
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  if (state.auth.token) {
+    headers.Authorization = `Bearer ${state.auth.token}`;
+    headers["x-agenthub-token"] = state.auth.token;
+  }
+
+  try {
+    const response = await fetch("/api/direct-message", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        agentId: state.activeAgentId,
+        conversationId: state.activeConversationId,
+        text: messageInput?.value.trim() || "",
+        clientMessageId: createRequestId(),
+        files: state.pendingDirectResources.map((resource) => ({
+          name: resource.name,
+          mime: resource.mime,
+          text: resource.text,
+        })),
+      }),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (response.status === 401) {
+      clearAuthToken();
+      openAuthPrompt(payload?.message || "访问令牌无效，请重新输入。");
+      return false;
+    }
+
+    if (!response.ok || !payload?.ok) {
+      state.directUploadError =
+        payload?.message || `上传文本资源失败：${response.status || "网络异常"}`;
+      renderComposerResources();
+      return false;
+    }
+
+    state.pendingDirectResources = [];
+    state.directUploadError = "";
+    if (messageInput) {
+      messageInput.value = "";
+    }
+    if (resourceInput) {
+      resourceInput.value = "";
+    }
+    if (payload.conversationId) {
+      state.activeConversationId = payload.conversationId;
+    }
+    state.messageViewport.stickToBottom = true;
+    syncDirectComposerHeight();
+    renderComposerResources();
+    refreshSnapshot("direct-upload");
+    if (messageInput && !isMobileLayout()) {
+      messageInput.focus();
+    }
+    return true;
+  } catch (error) {
+    state.directUploadError = error?.message || "上传文本资源失败。";
+    renderComposerResources();
+    return false;
+  } finally {
+    state.directUploadPending = false;
+    updateSendButtonState();
+  }
+}
+
+async function submitDirectMessage() {
   const text = messageInput?.value.trim();
-  if (!text || !state.activeAgentId) {
+  const hasResources = state.pendingDirectResources.length > 0;
+  if ((!text && !hasResources) || !state.activeAgentId) {
     updateSendButtonState();
     return false;
+  }
+
+  if (hasResources) {
+    return submitDirectResourceMessage();
   }
 
   if (!state.socket || state.socket.readyState !== 1) {
@@ -646,6 +899,120 @@ function escapeHtml(text) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function renderMessageAttachments(
+  attachments,
+  { conversation = null, agent = null, task = null, deviceName = "" } = {}
+) {
+  const items = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  if (items.length === 0) {
+    return "";
+  }
+
+  return `
+    <div class="message-attachments">
+      ${items
+        .map(
+          (attachment) => {
+            const resourceHref = buildResourceHref(attachment, {
+              conversation,
+              agent,
+              task,
+              deviceName,
+            });
+            const metaParts = [
+              "文本资源",
+              attachment.lineCount ? `${attachment.lineCount} 行` : "",
+              attachment.statusLabel || "",
+            ].filter(Boolean);
+            const detailParts = [
+              attachment.primaryTaskTitle ? `任务 ${attachment.primaryTaskTitle}` : "",
+              attachment.workspaceName ? `工作区 ${attachment.workspaceName}` : "",
+            ].filter(Boolean);
+
+            return `
+            <article class="resource-card">
+              <div class="resource-card-head">
+                <strong>${escapeHtml(attachment.name || "未命名文本资源")}</strong>
+                <span>${escapeHtml(formatFileSize(attachment.size || 0))}</span>
+              </div>
+              <p class="resource-card-meta">
+                ${escapeHtml(metaParts.join(" · "))}
+              </p>
+              ${
+                detailParts.length > 0
+                  ? `<p class="resource-card-detail">${escapeHtml(detailParts.join(" · "))}</p>`
+                  : ""
+              }
+              ${
+                attachment.previewText
+                  ? `<pre class="resource-card-preview">${escapeHtml(attachment.previewText)}</pre>`
+                  : ""
+              }
+              ${
+                resourceHref
+                  ? `
+                    <div class="resource-card-actions">
+                      <a class="ghost-btn resource-card-link" href="${escapeHtml(resourceHref)}">
+                        查看资源
+                      </a>
+                    </div>
+                  `
+                  : ""
+              }
+            </article>
+          `;
+          }
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+async function addPendingDirectResources(fileList) {
+  const incomingFiles = Array.from(fileList || []);
+  if (incomingFiles.length === 0) {
+    return;
+  }
+
+  const accepted = [];
+
+  for (const file of incomingFiles) {
+    if (!isSupportedTextFile(file)) {
+      state.directUploadError = `${file.name} 不是支持的文本文件。`;
+      continue;
+    }
+
+    if (Number(file.size || 0) > MAX_DIRECT_TEXT_FILE_BYTES) {
+      state.directUploadError = `${file.name} 超过 ${formatFileSize(
+        MAX_DIRECT_TEXT_FILE_BYTES
+      )} 限制。`;
+      continue;
+    }
+
+    const text = await file.text();
+    accepted.push({
+      id: createRequestId(),
+      name: file.name,
+      mime: file.type || "text/plain",
+      size: file.size || 0,
+      lineCount: text ? text.split(/\r\n|\r|\n/u).length : 0,
+      previewText: buildPendingResourcePreview(text),
+      text,
+    });
+  }
+
+  if (accepted.length > 0) {
+    state.pendingDirectResources = [
+      ...state.pendingDirectResources,
+      ...accepted,
+    ];
+    state.directUploadError = "";
+  }
+
+  renderComposerResources();
+  updateSendButtonState();
 }
 
 function shortenId(value) {
@@ -2008,6 +2375,9 @@ function buildConversationRenderSignature(conversationId, messages, hiddenMessag
         message.errorMessage || "",
         message.createdAt,
         message.text || "",
+        (message.attachments || [])
+          .map((attachment) => attachment.resourceId || attachment.name || "")
+          .join(","),
       ].join(":")
     ),
   ].join("|");
@@ -2133,10 +2503,17 @@ function renderMessages() {
         message.role === "user" && message.errorMessage
           ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
           : "";
+      const attachmentMarkup = renderMessageAttachments(message.attachments, {
+        conversation,
+        agent,
+        task: activeTask,
+        deviceName,
+      });
       return `
         <article class="message ${roleClass}">
           <div class="bubble">
             <p>${escapeHtml(message.text).replaceAll("\n", "<br />")}</p>
+            ${attachmentMarkup}
           </div>
           <div class="meta">
             <span>${formatTime(message.createdAt)}</span>
@@ -2479,6 +2856,7 @@ function render() {
     return;
   }
 
+  renderComposerResources();
   renderMessages();
   requestAnimationFrame(syncDirectOverlayOffsets);
 }
@@ -2602,6 +2980,18 @@ sendButton?.addEventListener("click", (event) => {
   submitDirectMessage();
 });
 
+resourcePickerButton?.addEventListener("click", () => {
+  resourceInput?.click();
+});
+
+resourceInput?.addEventListener("change", async (event) => {
+  const files = event.target?.files;
+  await addPendingDirectResources(files);
+  if (resourceInput) {
+    resourceInput.value = "";
+  }
+});
+
 if (managerComposer && managerInput) {
   managerComposer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2694,6 +3084,7 @@ directContextCollapseButton?.addEventListener("click", () => {
 updateViewportHeight();
 updateSendButtonState();
 syncDirectComposerHeight();
+renderComposerResources();
 bindDirectOverlayResizeTracking();
 function handleViewportChange() {
   updateViewportHeight();

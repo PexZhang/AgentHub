@@ -230,6 +230,156 @@ export function buildPersistedTaskDescriptor(task, agentMap, workspaceMap, conve
   };
 }
 
+function dedupeTextValues(values) {
+  const seen = new Set();
+  const result = [];
+
+  for (const value of values || []) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+function buildResourceUsageState({ taskCount = 0, activeTaskCount = 0, conversationCount = 0 }) {
+  if (activeTaskCount > 0) {
+    return {
+      key: "in_use",
+      label: "使用中",
+      active: true,
+      archived: false,
+      orphaned: false,
+    };
+  }
+
+  if (taskCount > 0 || conversationCount > 0) {
+    return {
+      key: "archived",
+      label: "已归档",
+      active: false,
+      archived: true,
+      orphaned: false,
+    };
+  }
+
+  return {
+    key: "orphaned",
+    label: "待清理",
+    active: false,
+    archived: false,
+    orphaned: true,
+  };
+}
+
+export function buildPersistedResourceDescriptor(
+  resource,
+  {
+    taskLinks = [],
+    taskMap = new Map(),
+    workspaceMap = new Map(),
+    conversationMap = new Map(),
+    conversationRefs = [],
+  } = {}
+) {
+  if (!resource) {
+    return null;
+  }
+
+  const linkedTasks = dedupeTextValues(taskLinks.map((link) => link?.taskId))
+    .map((taskId) => taskMap.get(taskId))
+    .filter(Boolean);
+  const activeTasks = linkedTasks.filter((task) => task.active);
+  const linkedConversationIds = dedupeTextValues([
+    resource.sourceConversationId,
+    ...conversationRefs,
+  ]);
+  const linkedConversations = linkedConversationIds
+    .map((conversationId) => conversationMap.get(conversationId))
+    .filter(Boolean);
+
+  const primaryTask = activeTasks[0] || linkedTasks[0] || null;
+  const workspace =
+    (resource.workspaceId ? workspaceMap.get(resource.workspaceId) : null) ||
+    (primaryTask?.workspaceId ? workspaceMap.get(primaryTask.workspaceId) : null) ||
+    null;
+  const usageState = buildResourceUsageState({
+    taskCount: linkedTasks.length,
+    activeTaskCount: activeTasks.length,
+    conversationCount: linkedConversations.length,
+  });
+  const agentIds = dedupeTextValues(
+    linkedTasks.map((task) => task.agentId).filter(Boolean)
+  );
+  const agentNames = dedupeTextValues(
+    linkedTasks.map((task) => task.agentName).filter(Boolean)
+  );
+  const primaryConversation =
+    (resource.sourceConversationId
+      ? conversationMap.get(resource.sourceConversationId)
+      : null) || linkedConversations[0] || null;
+
+  return {
+    id: resource.id,
+    resourceId: resource.id,
+    name: resource.name,
+    kind: resource.kind,
+    mime: resource.mime,
+    size: resource.size,
+    encoding: resource.encoding,
+    lineCount: resource.lineCount,
+    sha256: resource.sha256,
+    summary: resource.summary || null,
+    previewText: resource.previewText || null,
+    uploadedBy: resource.uploadedBy || "human",
+    workspaceId: workspace?.id || resource.workspaceId || null,
+    workspaceName: workspace?.name || null,
+    workspacePath: workspace?.path || null,
+    sourceConversationId: resource.sourceConversationId || primaryConversation?.id || null,
+    sourceConversationTitle: primaryConversation?.title || null,
+    sourceMessageId: resource.sourceMessageId || null,
+    status: usageState.key,
+    statusLabel: usageState.label,
+    active: usageState.active,
+    archived: usageState.archived,
+    orphaned: usageState.orphaned,
+    taskCount: linkedTasks.length,
+    activeTaskCount: activeTasks.length,
+    conversationCount: linkedConversations.length,
+    linkedTaskIds: linkedTasks.map((task) => task.id),
+    linkedTasks: linkedTasks.slice(0, 6).map((task) => ({
+      id: task.id,
+      title: task.title,
+      agentId: task.agentId || null,
+      agentName: task.agentName || null,
+      deviceName: task.deviceName || null,
+      workspaceId: task.workspaceId || null,
+      workspaceName: task.workspaceName || null,
+      status: task.status || null,
+      statusLabel: task.statusLabel || null,
+      conversationId: task.conversationId || null,
+    })),
+    conversationIds: linkedConversations.map((conversation) => conversation.id),
+    conversationTitles: linkedConversations
+      .map((conversation) => normalizeText(conversation.title))
+      .filter(Boolean),
+    agentIds,
+    agentNames,
+    primaryTaskId: primaryTask?.id || null,
+    primaryTaskTitle: primaryTask?.title || null,
+    primaryAgentId: primaryTask?.agentId || agentIds[0] || null,
+    primaryAgentName: primaryTask?.agentName || agentNames[0] || null,
+    createdAt: resource.createdAt,
+    updatedAt: resource.updatedAt,
+    tags: Array.isArray(resource.tags) ? resource.tags : [],
+  };
+}
+
 export function compareByRecency(left, right) {
   return new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime();
 }
@@ -592,6 +742,55 @@ export function normalizeApprovalRecord(approval) {
   };
 }
 
+export function normalizeResourceKind(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  return ["text"].includes(normalized) ? normalized : "text";
+}
+
+export function normalizeStoredResourceRecord(resource, index = 0) {
+  const createdAt = normalizeText(resource?.createdAt) || new Date().toISOString();
+
+  return {
+    id: normalizeText(resource?.id) || randomUUID(),
+    name: normalizeText(resource?.name) || `Resource ${index + 1}`,
+    kind: normalizeResourceKind(resource?.kind),
+    mime: normalizeText(resource?.mime) || "text/plain",
+    size: Math.max(0, Number(resource?.size) || 0),
+    sha256: normalizeText(resource?.sha256) || null,
+    storagePath: normalizeText(resource?.storagePath) || null,
+    encoding: normalizeText(resource?.encoding) || "utf-8",
+    lineCount: Math.max(0, Number(resource?.lineCount) || 0),
+    summary: normalizeText(resource?.summary) || null,
+    previewText: normalizeText(resource?.previewText) || null,
+    uploadedBy: normalizeText(resource?.uploadedBy) || "human",
+    sourceConversationId:
+      normalizeText(resource?.sourceConversationId || resource?.conversationId) || null,
+    sourceMessageId:
+      normalizeText(resource?.sourceMessageId || resource?.messageId) || null,
+    workspaceId: normalizeText(resource?.workspaceId) || null,
+    status: normalizeText(resource?.status) || "available",
+    tags: Array.isArray(resource?.tags)
+      ? resource.tags.map((tag) => normalizeText(tag)).filter(Boolean)
+      : [],
+    createdAt,
+    updatedAt: normalizeText(resource?.updatedAt) || createdAt,
+  };
+}
+
+export function normalizeTaskResourceLinkRecord(link, index = 0) {
+  const createdAt = normalizeText(link?.createdAt || link?.attachedAt) || new Date().toISOString();
+
+  return {
+    id: normalizeText(link?.id) || `task-resource-link-${index + 1}-${randomUUID()}`,
+    taskId: normalizeText(link?.taskId) || null,
+    resourceId: normalizeText(link?.resourceId) || null,
+    role: normalizeText(link?.role) || "input",
+    attachedBy: normalizeText(link?.attachedBy) || "human",
+    createdAt,
+    updatedAt: normalizeText(link?.updatedAt) || createdAt,
+  };
+}
+
 export function inferAgentModeFromConversations(conversations) {
   if (!Array.isArray(conversations) || conversations.length === 0) {
     return "offline";
@@ -610,6 +809,8 @@ export function buildDefaultStoreState() {
     employees: [],
     workspaces: [],
     tasks: [],
+    resources: [],
+    taskResourceLinks: [],
     approvals: [],
     manager: buildDefaultManagerState(),
   };
@@ -632,6 +833,14 @@ export function normalizePersistedStoreState(parsed) {
       : [],
     tasks: Array.isArray(parsed.tasks)
       ? parsed.tasks.map((task) => normalizeStoredTaskRecord(task)).filter(Boolean)
+      : [],
+    resources: Array.isArray(parsed.resources)
+      ? parsed.resources.map((resource, index) => normalizeStoredResourceRecord(resource, index)).filter(Boolean)
+      : [],
+    taskResourceLinks: Array.isArray(parsed.taskResourceLinks)
+      ? parsed.taskResourceLinks
+          .map((link, index) => normalizeTaskResourceLinkRecord(link, index))
+          .filter((link) => link?.taskId && link?.resourceId)
       : [],
     approvals: Array.isArray(parsed.approvals)
       ? parsed.approvals.map((approval) => normalizeApprovalRecord(approval)).filter(Boolean)
