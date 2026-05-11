@@ -146,12 +146,15 @@ export async function runDoctor({ argv = process.argv.slice(2), env = process.en
           )
         );
       } else {
+        const onlineAgents = Array.isArray(health.payload?.onlineAgents)
+          ? health.payload.onlineAgents.length
+          : Number(health.payload?.onlineAgents || 0);
         checks.push(
           buildCheck(
             "hub-origin",
             "pass",
             `Hub 可达：${runtimeConfig.hubOrigin}`,
-            `onlineAgents=${Number(health.payload?.onlineAgents || 0)}`
+            `onlineAgents=${Number.isFinite(onlineAgents) ? onlineAgents : 0}`
           )
         );
       }

@@ -47,6 +47,10 @@ const CODEX_MODEL = runtimeConfig.codexModel || "";
 const CODEX_SANDBOX = runtimeConfig.codexSandbox || "read-only";
 const CODEX_HOME = runtimeConfig.codexHome;
 const CODEX_SESSION_INDEX = join(CODEX_HOME, "session_index.jsonl");
+const CODEX_RUNTIME_ENV = {
+  ...process.env,
+  CODEX_HOME,
+};
 const MAX_RECENT_CODEX_SESSIONS = 12;
 const AGENT_WORKDIR_ROOTS = (Array.isArray(runtimeConfig.workdirRoots)
   ? runtimeConfig.workdirRoots
@@ -421,7 +425,7 @@ const runtimeAdapter = createRuntimeAdapter({
   getConversationWorkdir,
   loadRecentCodexSessions,
   sleep,
-  env: process.env,
+  env: CODEX_RUNTIME_ENV,
 });
 
 const agentCapabilities = [
