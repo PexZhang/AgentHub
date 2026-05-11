@@ -106,7 +106,7 @@ async function runCodex({ codexBin, args, cwd, env = process.env }) {
 export function createCodexRuntime({
   codexBin,
   codexModel = "",
-  codexSandbox = "read-only",
+  codexSandbox = "danger-full-access",
   defaultWorkdir,
   systemPrompt = "",
   getConversationWorkdir,

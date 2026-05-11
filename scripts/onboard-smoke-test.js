@@ -184,6 +184,13 @@ async function main() {
       }
     );
 
+    const generatedConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(
+      generatedConfig.codex?.sandbox,
+      "danger-full-access",
+      "Codex onboarding should default to full filesystem access"
+    );
+
     const doctorOutput = await runCommand(
       process.execPath,
       ["agent/doctor.js", "--config", configPath, "--agent-mode", "echo", "--json"],

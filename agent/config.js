@@ -399,9 +399,9 @@ export async function loadAgentRuntimeConfig({ argv = process.argv.slice(2), env
         cliValue: args["codex-sandbox"],
         fileValue: codexConfig.sandbox,
         envValue: env.CODEX_SANDBOX,
-        fallback: "read-only",
+        fallback: "danger-full-access",
         preferFile,
-      }) || "read-only",
+      }) || "danger-full-access",
     codexHome:
       resolvePathLike(
         pickTextValue({

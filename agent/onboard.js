@@ -191,7 +191,11 @@ async function main() {
       bin: firstArgText(args, "codex-bin", process.env.CODEX_BIN || "codex"),
       workdir: codexWorkdir,
       model: firstArgText(args, "codex-model", process.env.CODEX_MODEL),
-      sandbox: firstArgText(args, "codex-sandbox", process.env.CODEX_SANDBOX || "read-only"),
+      sandbox: firstArgText(
+        args,
+        "codex-sandbox",
+        process.env.CODEX_SANDBOX || "danger-full-access"
+      ),
       home: firstArgText(args, "codex-home", process.env.CODEX_HOME),
     },
     workspaces: combinedWorkspaces,

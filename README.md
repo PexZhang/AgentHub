@@ -294,7 +294,7 @@ CODEX_BIN=codex
 CODEX_WORKDIR=/Users/zhangpeng
 AGENT_WORKDIR_ROOTS=/Users/zhangpeng
 CODEX_MODEL=
-CODEX_SANDBOX=read-only
+CODEX_SANDBOX=danger-full-access
 ```
 
 ### AI经理 怎么接大模型
