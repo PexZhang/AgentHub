@@ -262,8 +262,8 @@ function buildManagerRuntimeContext(snapshot = buildSnapshot()) {
       : "- none";
 
   return [
-    "Runtime context from AgentHub live snapshot.",
-    "Use this as the source of truth for current employees, online/offline state, tasks, workspaces, approvals, and resources. Historical chat messages may be stale; do not infer current status from history when it conflicts with this snapshot.",
+    "Runtime context from AgentHub live snapshot (REAL-TIME, AUTHORITATIVE).",
+    "CRITICAL: This snapshot is the ONLY source of truth for current employees, online/offline state, tasks, workspaces, approvals, and resources. NEVER copy or reference status information from previous assistant messages in this conversation — they are stale. When answering status questions, ALWAYS call the list_employees or get_employee_status tool first, or directly use the data below. If this snapshot says onlineEmployees=1, then there IS 1 employee online regardless of what previous messages said.",
     `snapshotGeneratedAt=${snapshot.generatedAt || new Date().toISOString()}`,
     `summary: onlineEmployees=${summary.onlineAgentCount ?? agents.filter((agent) => agent.online).length}; totalEmployees=${summary.totalAgentCount ?? agents.length}; activeTasks=${summary.activeTaskCount ?? 0}; blockedTasks=${summary.blockedTaskCount ?? 0}; pendingApprovals=${summary.pendingApprovalCount ?? 0}; workspaces=${summary.workspaceCount ?? workspaces.length}; resources=${summary.resourceCount ?? 0}`,
     "employees:",
@@ -2588,15 +2588,21 @@ async function createOpenAIManagerResponse(input, previousResponseId = null) {
 }
 
 function buildManagerChatHistory() {
+  const MAX_HISTORY_MESSAGES = 10;
+  const allMessages = store
+    .listManagerMessages()
+    .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
+    .map((message) => ({
+      role: message.role,
+      content: normalizeText(message.text),
+    }));
+
+  // Only keep recent messages to avoid stale context confusing the model
+  const recentMessages = allMessages.slice(-MAX_HISTORY_MESSAGES);
+
   return [
     { role: "system", content: buildManagerInstructions() },
-    ...store
-      .listManagerMessages()
-      .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
-      .map((message) => ({
-        role: message.role,
-        content: normalizeText(message.text),
-      })),
+    ...recentMessages,
   ];
 }
 
