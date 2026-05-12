@@ -376,6 +376,7 @@ function getCodexSessionHomes() {
   const paths = [
     CODEX_HOME,
     join(home, ".codex"),
+    join(home, ".agenthub", "codex-homes", AGENT_ID),
     join(xdgData, "codex"),
     join(xdgConfig, "codex"),
   ];
