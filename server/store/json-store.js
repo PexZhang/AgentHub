@@ -559,11 +559,15 @@ export class JsonStore {
     );
   }
 
-  findConversationByCodexSession(agentId, codexSessionId) {
+  findConversationByCodexSession(agentId, codexSessionId, codexHome = null) {
+    const normalizedCodexHome = normalizeText(codexHome);
     return this.state.conversations.find(
       (conversation) =>
         conversation.agentId === agentId &&
-        conversation.codexSessionId === codexSessionId
+        conversation.codexSessionId === codexSessionId &&
+        (!normalizedCodexHome ||
+          !conversation.codexHome ||
+          conversation.codexHome === normalizedCodexHome)
     );
   }
 
@@ -583,6 +587,7 @@ export class JsonStore {
       deviceName: normalizeText(options.deviceName) || null,
       workspaceId: normalizeText(options.workspaceId) || null,
       codexWorkdir: normalizeText(options.codexWorkdir) || null,
+      codexHome: normalizeText(options.codexHome) || null,
       codexSessionId: normalizeText(options.codexSessionId) || null,
       codexThreadName: normalizeText(options.codexThreadName) || null,
       codexSessionUpdatedAt: normalizeText(options.codexSessionUpdatedAt) || null,

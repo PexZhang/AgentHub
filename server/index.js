@@ -3869,9 +3869,10 @@ wss.on("connection", (socket) => {
         }
 
         const codexSessionId = normalizeText(payload.codexSessionId);
+        const codexHome = normalizeText(payload.codexHome);
         let conversation =
           codexSessionId &&
-          store.findConversationByCodexSession(agentId, codexSessionId);
+          store.findConversationByCodexSession(agentId, codexSessionId, codexHome);
 
         if (!conversation) {
           conversation = await store.createConversation(agentId, {
@@ -3879,6 +3880,7 @@ wss.on("connection", (socket) => {
             deviceId: agentConnection?.deviceId || null,
             deviceName: agentConnection?.deviceName || null,
             codexWorkdir: normalizeText(payload.codexWorkdir),
+            codexHome,
             codexSessionId,
             codexThreadName: normalizeText(payload.codexThreadName),
             codexSessionUpdatedAt: normalizeText(payload.codexSessionUpdatedAt),
@@ -3896,6 +3898,7 @@ wss.on("connection", (socket) => {
       if (payload.type === "open_codex_session" && socket.clientRole === "app") {
         const agentId = normalizeText(payload.agentId);
         const codexSessionId = normalizeText(payload.codexSessionId);
+        const codexHome = normalizeText(payload.codexHome);
         const agentConnection = agentClients.get(agentId);
 
         if (!agentId || !codexSessionId) {
@@ -3906,23 +3909,30 @@ wss.on("connection", (socket) => {
           return;
         }
 
-        let conversation = store.findConversationByCodexSession(agentId, codexSessionId);
+        let conversation = store.findConversationByCodexSession(
+          agentId,
+          codexSessionId,
+          codexHome
+        );
 
         if (!conversation) {
           conversation = await store.createConversation(agentId, {
             deviceId: agentConnection?.deviceId || null,
             deviceName: agentConnection?.deviceName || null,
             codexWorkdir: normalizeText(payload.codexWorkdir),
+            codexHome,
             codexSessionId,
             codexThreadName: normalizeText(payload.codexThreadName),
             codexSessionUpdatedAt: normalizeText(payload.codexSessionUpdatedAt),
           });
           broadcastSnapshot();
         } else if (
+          (!conversation.codexHome && codexHome) ||
           (!conversation.codexThreadName && normalizeText(payload.codexThreadName)) ||
           (!conversation.codexWorkdir && normalizeText(payload.codexWorkdir))
         ) {
           conversation = await store.updateConversation(conversation.id, {
+            codexHome: codexHome || conversation.codexHome || null,
             codexThreadName: normalizeText(payload.codexThreadName),
             codexWorkdir:
               normalizeText(payload.codexWorkdir) || conversation.codexWorkdir || null,
@@ -4417,10 +4427,18 @@ wss.on("connection", (socket) => {
         const codexThreadName = normalizeText(payload.codexThreadName);
         const codexSessionUpdatedAt = normalizeText(payload.codexSessionUpdatedAt);
         const codexWorkdir = normalizeText(payload.codexWorkdir);
+        const codexHome = normalizeText(payload.codexHome);
 
-        if (codexSessionId || codexThreadName || codexSessionUpdatedAt || codexWorkdir) {
+        if (
+          codexSessionId ||
+          codexThreadName ||
+          codexSessionUpdatedAt ||
+          codexWorkdir ||
+          codexHome
+        ) {
           await store.updateConversation(conversationId, {
             codexWorkdir: codexWorkdir || conversation.codexWorkdir || null,
+            codexHome: codexHome || conversation.codexHome || null,
             codexSessionId: codexSessionId || conversation.codexSessionId || null,
             codexThreadName: codexThreadName || conversation.codexThreadName || null,
             codexSessionUpdatedAt:

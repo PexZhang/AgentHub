@@ -407,6 +407,7 @@ export function normalizeCodexSessions(input, limit = 12) {
       updatedAt:
         normalizeText(item?.updatedAt || item?.updated_at || item?.lastSeenAt) ||
         null,
+      codexHome: normalizeText(item?.codexHome || item?.codex_home) || null,
     });
 
     if (sessions.length >= limit) {

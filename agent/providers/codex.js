@@ -44,7 +44,7 @@ function runCodexStreaming({ codexBin, args, cwd, env = process.env }) {
 
   const childProcess = spawn(codexBin, args, {
     cwd,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
     env,
   });
   child = childProcess;
@@ -157,19 +157,14 @@ function runCodexStreaming({ codexBin, args, cwd, env = process.env }) {
     }
   });
 
-  // Send approval decision back to Codex via stdin
+  // `codex exec` waits for stdin EOF when stdin is piped, even if the prompt
+  // is passed as an argument. Keep stdin ignored so non-interactive runs start.
   emitter.approve = (approved = true) => {
-    if (child && child.stdin && !child.stdin.destroyed) {
-      const response = approved ? "yes\n" : "no\n";
-      child.stdin.write(response);
-    }
+    return false;
   };
 
-  // Send arbitrary input to Codex stdin (for future interactive use)
   emitter.sendInput = (text) => {
-    if (child && child.stdin && !child.stdin.destroyed) {
-      child.stdin.write(text);
-    }
+    return false;
   };
 
   emitter.kill = (signal = "SIGTERM") => {
@@ -190,6 +185,7 @@ export function createCodexRuntime({
   defaultWorkdir,
   systemPrompt = "",
   getConversationWorkdir,
+  getConversationCodexHome = () => env.CODEX_HOME,
   loadRecentSessions,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   env = process.env,
@@ -199,14 +195,13 @@ export function createCodexRuntime({
 
   return {
     id: "codex",
-    capabilities: ["resume_session", "long_task", "streaming_progress", "approval_flow"],
+    capabilities: ["resume_session", "long_task", "streaming_progress"],
 
-    // Expose the active runner so agent/index.js can forward approval decisions
+    // Expose the active runner so agent/index.js can report intervention support.
     getActiveRun() {
       return activeRun;
     },
 
-    // Called when Hub sends approval decision back to this agent
     resolveApproval(decision) {
       if (activeRun) {
         activeRun.approve(decision === "approved");
@@ -220,10 +215,20 @@ export function createCodexRuntime({
       };
     },
 
-    // Streaming reply with progress callbacks and approval flow support
+    // Streaming reply with progress callbacks.
     async reply({ conversation, message, onProgress, onApprovalNeeded }) {
       const codexSessionId = String(conversation?.codexSessionId || "").trim();
       const codexWorkdir = getConversationWorkdir(conversation);
+      let sessionCatalog = [];
+      if (codexSessionId) {
+        sessionCatalog = await loadRecentSessions();
+      }
+      const selectedSession =
+        sessionCatalog.find((item) => item.id === codexSessionId) || null;
+      const codexHome = getConversationCodexHome({
+        ...conversation,
+        codexHome: conversation?.codexHome || selectedSession?.codexHome,
+      });
 
       let args;
       if (codexSessionId) {
@@ -268,7 +273,10 @@ export function createCodexRuntime({
         codexBin,
         args,
         cwd: codexWorkdir,
-        env,
+        env: {
+          ...env,
+          CODEX_HOME: codexHome,
+        },
       });
 
       activeRun = runner;
@@ -327,6 +335,7 @@ export function createCodexRuntime({
           resolve({
             text: lastAgentMessage.trim(),
             codexWorkdir,
+            codexHome,
             codexSessionId: sessionId,
             codexThreadName: session?.threadName || conversation?.codexThreadName || null,
             codexSessionUpdatedAt: session?.updatedAt || null,

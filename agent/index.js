@@ -46,7 +46,6 @@ const CODEX_WORKDIR = runtimeConfig.codexWorkdir || process.cwd();
 const CODEX_MODEL = runtimeConfig.codexModel || "";
 const CODEX_SANDBOX = runtimeConfig.codexSandbox || "danger-full-access";
 const CODEX_HOME = runtimeConfig.codexHome;
-const CODEX_SESSION_INDEX = join(CODEX_HOME, "session_index.jsonl");
 const CODEX_RUNTIME_ENV = {
   ...process.env,
   CODEX_HOME,
@@ -370,29 +369,57 @@ async function listDirectories(pathValue) {
   };
 }
 
-function getCodexSessionIndexPaths() {
-  // Codex may store session_index.jsonl in multiple locations depending on version/platform
-  const paths = [CODEX_SESSION_INDEX];
+function getCodexSessionHomes() {
   const home = process.env.HOME || process.env.USERPROFILE || "";
-
-  // XDG data directory (Linux/macOS)
   const xdgData = process.env.XDG_DATA_HOME || join(home, ".local", "share");
-  paths.push(join(xdgData, "codex", "session_index.jsonl"));
-
-  // XDG config directory
   const xdgConfig = process.env.XDG_CONFIG_HOME || join(home, ".config");
-  paths.push(join(xdgConfig, "codex", "session_index.jsonl"));
+  const paths = [
+    CODEX_HOME,
+    join(home, ".codex"),
+    join(xdgData, "codex"),
+    join(xdgConfig, "codex"),
+  ];
 
-  // macOS Application Support
   if (process.platform === "darwin") {
-    paths.push(join(home, "Library", "Application Support", "codex", "session_index.jsonl"));
+    paths.push(join(home, "Library", "Application Support", "codex"));
   }
 
-  // Deduplicate
-  return [...new Set(paths.map((p) => resolve(p)))];
+  return [...new Set(paths.filter(Boolean).map((p) => resolve(p)))];
 }
 
-function parseSessionIndex(raw) {
+function getCodexSessionIndexPaths() {
+  return getCodexSessionHomes().map((codexHome) => join(codexHome, "session_index.jsonl"));
+}
+
+function getCodexSessionRoots() {
+  return getCodexSessionHomes().map((codexHome) => join(codexHome, "sessions"));
+}
+
+function getCodexSessionIndexEntries() {
+  return getCodexSessionHomes().map((codexHome) => ({
+    codexHome,
+    indexPath: join(codexHome, "session_index.jsonl"),
+  }));
+}
+
+function getCodexSessionRootEntries() {
+  return getCodexSessionHomes().map((codexHome) => ({
+    codexHome,
+    root: join(codexHome, "sessions"),
+  }));
+}
+
+function getConversationCodexHome(conversation) {
+  const candidate = normalizeText(conversation?.codexHome);
+  if (!candidate) {
+    return CODEX_HOME;
+  }
+
+  const resolved = resolve(candidate);
+  return getCodexSessionHomes().includes(resolved) ? resolved : CODEX_HOME;
+}
+
+function parseSessionIndex(raw, codexHome) {
   return raw
     .split("\n")
     .map((line) => line.trim())
@@ -403,10 +430,12 @@ function parseSessionIndex(raw) {
         if (!item?.id) {
           return null;
         }
+        const threadName = sanitizeSessionTitle(item.thread_name || item.threadName);
         return {
           id: String(item.id),
-          threadName: String(item.thread_name || item.threadName || "未命名 Session"),
+          threadName: threadName || "未命名 Session",
           updatedAt: item.updated_at || item.updatedAt || null,
+          codexHome,
         };
       } catch {
         return null;
@@ -415,23 +444,186 @@ function parseSessionIndex(raw) {
     .filter(Boolean);
 }
 
+function isUsableSessionTitle(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return false;
+  }
+
+  return ![
+    "<INSTRUCTIONS>",
+    "<environment_context>",
+    "<permissions instructions>",
+    "AGENTS.md instructions",
+    "Filesystem sandboxing defines",
+    "你是 AgentHub 里的一个数字员工",
+  ].some((pattern) => text.includes(pattern));
+}
+
+function sanitizeSessionTitle(value) {
+  const title = extractSessionTitle(value);
+  return isUsableSessionTitle(title) ? title : "";
+}
+
+function extractSessionTitle(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return "";
+  }
+
+  const latestMessageMatch = text.match(/当前用户最新消息：\s*([\s\S]*?)(?:\n对话历史：|$)/);
+  if (latestMessageMatch?.[1]) {
+    const latestMessage = normalizeText(latestMessageMatch[1]);
+    if (latestMessage) {
+      return latestMessage.length > 80 ? `${latestMessage.slice(0, 80)}...` : latestMessage;
+    }
+  }
+
+  const chunks = text
+    .split(/\n{2,}/)
+    .map((item) => normalizeText(item))
+    .filter(Boolean);
+  const title = chunks[chunks.length - 1] || text;
+  return title.length > 80 ? `${title.slice(0, 80)}...` : title;
+}
+
+function extractTextContent(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((item) => item?.text || item?.input_text || item?.output_text || "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function parseSessionFile(filePath, codexHome) {
+  const raw = await fs.readFile(filePath, "utf8");
+  const fallbackId =
+    basename(filePath).match(/([0-9a-f]{8}-[0-9a-f-]{27,})\.jsonl$/i)?.[1] || "";
+  let sessionId = fallbackId;
+  let threadName = "";
+  let updatedAt = "";
+
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    let entry;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+
+    if (entry.timestamp && (!updatedAt || new Date(entry.timestamp) > new Date(updatedAt))) {
+      updatedAt = entry.timestamp;
+    }
+
+    if (entry.type === "session_meta") {
+      sessionId = String(entry.payload?.id || sessionId);
+      threadName =
+        sanitizeSessionTitle(entry.payload?.thread_name || entry.payload?.threadName) ||
+        threadName;
+      updatedAt = entry.payload?.timestamp || updatedAt;
+      continue;
+    }
+
+    if (entry.payload?.type === "user_message") {
+      threadName = sanitizeSessionTitle(entry.payload.message) || threadName;
+      continue;
+    }
+
+    if (!threadName && entry.payload?.type === "message" && entry.payload?.role === "user") {
+      threadName = sanitizeSessionTitle(extractTextContent(entry.payload.content));
+    }
+  }
+
+  if (!sessionId) {
+    return null;
+  }
+
+  return {
+    id: sessionId,
+    threadName: threadName || "未命名 Session",
+    updatedAt: updatedAt || null,
+    codexHome,
+  };
+}
+
+async function listSessionFiles(root, codexHome) {
+  try {
+    const entries = await fs.readdir(root, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    const filePaths = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map((entry) => join(entry.parentPath || entry.path || root, entry.name));
+
+    return Promise.all(
+      filePaths.map(async (filePath) => {
+        try {
+          const stats = await fs.stat(filePath);
+          return { filePath, mtimeMs: stats.mtimeMs, codexHome };
+        } catch {
+          return { filePath, mtimeMs: 0, codexHome };
+        }
+      })
+    );
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`Failed to scan Codex session directory at ${root}:`, error.message);
+    }
+    return [];
+  }
+}
+
 async function loadRecentCodexSessions() {
   if (!CODEX_BIN) {
     return [];
   }
 
-  const candidatePaths = getCodexSessionIndexPaths();
   const allSessions = [];
 
-  for (const indexPath of candidatePaths) {
+  for (const { codexHome, indexPath } of getCodexSessionIndexEntries()) {
     try {
       const raw = await fs.readFile(indexPath, "utf8");
-      const sessions = parseSessionIndex(raw);
+      const sessions = parseSessionIndex(raw, codexHome);
       allSessions.push(...sessions);
     } catch (error) {
       if (error.code !== "ENOENT") {
         console.warn(`Failed to read Codex session index at ${indexPath}:`, error.message);
       }
+    }
+  }
+
+  const sessionFiles = (
+    await Promise.all(
+      getCodexSessionRootEntries().map(({ root, codexHome }) =>
+        listSessionFiles(root, codexHome)
+      )
+    )
+  ).flat();
+
+  const recentFiles = sessionFiles
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, MAX_RECENT_CODEX_SESSIONS * 4);
+  for (const { filePath, codexHome } of recentFiles) {
+    try {
+      const session = await parseSessionFile(filePath, codexHome);
+      if (session) {
+        allSessions.push(session);
+      }
+    } catch (error) {
+      console.warn(`Failed to parse Codex session file at ${filePath}:`, error.message);
     }
   }
 
@@ -465,6 +657,15 @@ if (currentMode === "codex") {
       console.log(`  [  -  ] ${p}`);
     }
   }
+  console.log("Codex session file search roots:");
+  for (const p of getCodexSessionRoots()) {
+    try {
+      await fs.access(p);
+      console.log(`  [FOUND] ${p}`);
+    } catch {
+      console.log(`  [  -  ] ${p}`);
+    }
+  }
 }
 
 const runtimeAdapter = createRuntimeAdapter({
@@ -478,6 +679,7 @@ const runtimeAdapter = createRuntimeAdapter({
   codexSandbox: CODEX_SANDBOX,
   defaultWorkdir: DEFAULT_CODEX_WORKDIR,
   getConversationWorkdir,
+  getConversationCodexHome,
   loadRecentCodexSessions,
   sleep,
   env: CODEX_RUNTIME_ENV,
@@ -660,7 +862,7 @@ function connect() {
       if (payload.type === "intervene_task") {
         const activeRun = runtimeAdapter.getActiveRun?.();
         if (activeRun && normalizeText(payload.text)) {
-          activeRun.sendInput(normalizeText(payload.text) + "\n");
+          const interventionAccepted = activeRun.sendInput(normalizeText(payload.text) + "\n");
           sendJson(ws, buildProgressEvent(
             {
               conversationId: normalizeText(payload.conversationId),
@@ -670,7 +872,9 @@ function connect() {
               status: "in_progress",
               runId: runtimeState.currentRunId,
               runStatus: "running",
-              summary: `收到干预指令：${normalizeText(payload.text)}`,
+              summary: interventionAccepted === false
+                ? "当前 Codex 执行通道不支持运行中输入，请等待本轮完成后继续补充。"
+                : `收到干预指令：${normalizeText(payload.text)}`,
             }
           ));
         }
@@ -783,6 +987,7 @@ function connect() {
         replyTo: messageId,
         text: reply.text,
         codexWorkdir: reply.codexWorkdir || null,
+        codexHome: reply.codexHome || null,
         codexSessionId: reply.codexSessionId || null,
         codexThreadName: reply.codexThreadName || null,
         codexSessionUpdatedAt: reply.codexSessionUpdatedAt || null,

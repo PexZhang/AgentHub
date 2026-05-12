@@ -1346,6 +1346,7 @@ function requestOpenCodexSession(agent, session, fallbackWorkdir = null) {
     codexSessionId: session.id,
     codexThreadName: session.threadName,
     codexSessionUpdatedAt: session.updatedAt,
+    codexHome: session.codexHome || null,
     codexWorkdir: fallbackWorkdir || getAgentDefaultWorkdir(agent) || null,
   });
 }

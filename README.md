@@ -39,6 +39,7 @@ AgentHub 不是普通聊天工具，也不应该继续演化成一个越来越�
 - 一台电脑上可以运行多个 Agent，它们共享同一个 `DEVICE_ID / DEVICE_NAME`
 - 每个会话都严格归属于某一个 Agent，不再在页面里切换 mode
 - Codex 类 Agent 的会话会自动绑定到底层 Codex session
+- 导入设备上已有的 Codex session 时，会同时保留它的 Codex home，确保后续恢复到原始本地会话目录
 
 ## 文本资源
 
