@@ -4510,6 +4510,11 @@ wss.on("connection", (socket) => {
     }
 
     if (socket.clientRole === "agent" && socket.agentId) {
+      const currentConnection = agentClients.get(socket.agentId);
+      if (currentConnection?.socket !== socket) {
+        return;
+      }
+
       agentClients.delete(socket.agentId);
       store.markEmployeeOffline(socket.agentId).catch((error) => {
         console.error("Failed to mark employee offline:", error.message);
