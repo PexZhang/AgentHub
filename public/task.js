@@ -44,8 +44,16 @@ const taskProgress = document.querySelector("#task-progress");
 const taskContextGrid = document.querySelector("#task-context-grid");
 const taskResourceList = document.querySelector("#task-resource-list");
 const taskApprovalList = document.querySelector("#task-approval-list");
+const taskProgressStreamSection = document.querySelector("#task-progress-stream-section");
+const taskProgressStream = document.querySelector("#task-progress-stream");
+const taskInterveneSection = document.querySelector("#task-intervene-section");
+const interveneInput = document.querySelector("#intervene-input");
+const interveneSendBtn = document.querySelector("#intervene-send-btn");
 const authModal = document.querySelector("#auth-modal");
 const authModalContent = document.querySelector("#auth-modal-content");
+
+// Progress stream state
+const progressEntries = [];
 
 function loadStoredAppToken() {
   try {
@@ -650,6 +658,68 @@ function renderTaskView(task, conversation, agent, workspace, approvals) {
   taskApprovalList.innerHTML = renderActionCard(task, conversation, agent, workspace, approvals);
 }
 
+function isTaskInProgress(task) {
+  if (!task) return false;
+  const activeStatuses = ["in_progress", "assigned", "running", "waiting_approval"];
+  return activeStatuses.includes(task.status) || activeStatuses.includes(task.runStatus);
+}
+
+function renderProgressStream(task) {
+  if (!taskProgressStreamSection || !taskProgressStream) return;
+
+  if (!task || progressEntries.length === 0) {
+    taskProgressStreamSection.hidden = true;
+    return;
+  }
+
+  taskProgressStreamSection.hidden = false;
+  const recentEntries = progressEntries.slice(-20);
+  taskProgressStream.innerHTML = recentEntries
+    .map((entry) => {
+      const time = new Intl.DateTimeFormat("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(new Date(entry.timestamp));
+      return `<div class="progress-entry"><span class="progress-time">${escapeHtml(time)}</span><span class="progress-text">${escapeHtml(entry.summary)}</span></div>`;
+    })
+    .join("");
+  taskProgressStream.scrollTop = taskProgressStream.scrollHeight;
+}
+
+function renderInterveneSection(task) {
+  if (!taskInterveneSection) return;
+
+  if (!task || !isTaskInProgress(task)) {
+    taskInterveneSection.hidden = true;
+    return;
+  }
+
+  taskInterveneSection.hidden = false;
+}
+
+function sendIntervention() {
+  const text = normalizeText(interveneInput?.value);
+  if (!text || !state.socket || state.socket.readyState !== 1) return;
+
+  const snapshot = getSnapshot();
+  const task = findTask(snapshot);
+  if (!task?.id) return;
+
+  state.socket.send(JSON.stringify({
+    type: "intervene_task",
+    taskId: task.id,
+    text,
+  }));
+
+  progressEntries.push({
+    timestamp: new Date().toISOString(),
+    summary: `[你] ${text}`,
+  });
+  interveneInput.value = "";
+  renderProgressStream(task);
+}
+
 function render() {
   renderConnection();
   renderAuthPrompt();
@@ -662,6 +732,8 @@ function render() {
   const approvals = listApprovals(snapshot, task);
 
   renderTaskView(task, conversation, agent, workspace, approvals);
+  renderProgressStream(task);
+  renderInterveneSection(task);
 }
 
 function connect() {
@@ -719,7 +791,33 @@ function connect() {
     if (payload.type === "snapshot") {
       snapshotRecovery.clearSnapshotFallback();
       state.snapshot = payload.data || null;
+
+      // Extract progress from snapshot task updates
+      const snapshot = getSnapshot();
+      const task = findTask(snapshot);
+      if (task?.progressSummary) {
+        const lastEntry = progressEntries[progressEntries.length - 1];
+        if (!lastEntry || lastEntry.summary !== task.progressSummary) {
+          progressEntries.push({
+            timestamp: task.updatedAt || new Date().toISOString(),
+            summary: task.progressSummary,
+          });
+        }
+      }
+
       render();
+    }
+
+    // Real-time progress events from agent
+    if (payload.type === "task_progress") {
+      const currentTask = findTask(getSnapshot());
+      if (currentTask && payload.taskId === currentTask.id && payload.summary) {
+        progressEntries.push({
+          timestamp: payload.updatedAt || new Date().toISOString(),
+          summary: payload.summary,
+        });
+        renderProgressStream(currentTask);
+      }
     }
   });
 }
@@ -738,6 +836,15 @@ function handleViewportChange() {
 window.addEventListener("resize", handleViewportChange);
 window.visualViewport?.addEventListener("resize", handleViewportChange);
 window.visualViewport?.addEventListener("scroll", handleViewportChange);
+
+// Intervention input bindings
+interveneSendBtn?.addEventListener("click", sendIntervention);
+interveneInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    sendIntervention();
+  }
+});
 
 updateViewportHeight();
 connect();

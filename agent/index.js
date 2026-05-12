@@ -370,45 +370,100 @@ async function listDirectories(pathValue) {
   };
 }
 
+function getCodexSessionIndexPaths() {
+  // Codex may store session_index.jsonl in multiple locations depending on version/platform
+  const paths = [CODEX_SESSION_INDEX];
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+
+  // XDG data directory (Linux/macOS)
+  const xdgData = process.env.XDG_DATA_HOME || join(home, ".local", "share");
+  paths.push(join(xdgData, "codex", "session_index.jsonl"));
+
+  // XDG config directory
+  const xdgConfig = process.env.XDG_CONFIG_HOME || join(home, ".config");
+  paths.push(join(xdgConfig, "codex", "session_index.jsonl"));
+
+  // macOS Application Support
+  if (process.platform === "darwin") {
+    paths.push(join(home, "Library", "Application Support", "codex", "session_index.jsonl"));
+  }
+
+  // Deduplicate
+  return [...new Set(paths.map((p) => resolve(p)))];
+}
+
+function parseSessionIndex(raw) {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        const item = JSON.parse(line);
+        if (!item?.id) {
+          return null;
+        }
+        return {
+          id: String(item.id),
+          threadName: String(item.thread_name || item.threadName || "未命名 Session"),
+          updatedAt: item.updated_at || item.updatedAt || null,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
 async function loadRecentCodexSessions() {
   if (!CODEX_BIN) {
     return [];
   }
 
-  try {
-    const raw = await fs.readFile(CODEX_SESSION_INDEX, "utf8");
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          const item = JSON.parse(line);
-          if (!item?.id) {
-            return null;
-          }
+  const candidatePaths = getCodexSessionIndexPaths();
+  const allSessions = [];
 
-          return {
-            id: String(item.id),
-            threadName: String(item.thread_name || item.threadName || "未命名 Session"),
-            updatedAt: item.updated_at || item.updatedAt || null,
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .sort((left, right) => {
-        const leftTime = new Date(left.updatedAt || 0).getTime();
-        const rightTime = new Date(right.updatedAt || 0).getTime();
-        return rightTime - leftTime;
-      })
-      .slice(0, MAX_RECENT_CODEX_SESSIONS);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      console.warn("Failed to read Codex session index:", error.message);
+  for (const indexPath of candidatePaths) {
+    try {
+      const raw = await fs.readFile(indexPath, "utf8");
+      const sessions = parseSessionIndex(raw);
+      allSessions.push(...sessions);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(`Failed to read Codex session index at ${indexPath}:`, error.message);
+      }
     }
-    return [];
+  }
+
+  // Deduplicate by session id, keep the most recent entry
+  const sessionMap = new Map();
+  for (const session of allSessions) {
+    const existing = sessionMap.get(session.id);
+    if (!existing || new Date(session.updatedAt || 0) > new Date(existing.updatedAt || 0)) {
+      sessionMap.set(session.id, session);
+    }
+  }
+
+  return [...sessionMap.values()]
+    .sort((left, right) => {
+      const leftTime = new Date(left.updatedAt || 0).getTime();
+      const rightTime = new Date(right.updatedAt || 0).getTime();
+      return rightTime - leftTime;
+    })
+    .slice(0, MAX_RECENT_CODEX_SESSIONS);
+}
+
+// Log session index search paths at startup for diagnostics
+if (currentMode === "codex") {
+  const sessionPaths = getCodexSessionIndexPaths();
+  console.log("Codex session index search paths:");
+  for (const p of sessionPaths) {
+    try {
+      await fs.access(p);
+      console.log(`  [FOUND] ${p}`);
+    } catch {
+      console.log(`  [  -  ] ${p}`);
+    }
   }
 }
 
@@ -447,6 +502,8 @@ function updateRuntimeState(patch = {}) {
   Object.assign(runtimeState, patch);
 }
 
+let lastSyncedSessionHash = "";
+
 function sendHeartbeat(ws) {
   sendJson(ws, {
     type: "agent_heartbeat",
@@ -460,11 +517,32 @@ function sendHeartbeat(ws) {
   });
 }
 
+// Periodically sync Codex sessions so the Hub always has fresh data
+async function syncCodexSessions(ws) {
+  try {
+    const sessions = await loadRecentCodexSessions();
+    const hash = JSON.stringify(sessions.map((s) => s.id).sort());
+    if (hash === lastSyncedSessionHash) {
+      return;
+    }
+    lastSyncedSessionHash = hash;
+    sendJson(ws, {
+      type: "agent_codex_sessions",
+      agentId: AGENT_ID,
+      sessions,
+    });
+  } catch {
+    // Ignore sync errors
+  }
+}
+
 function startHeartbeat(ws) {
   stopHeartbeat();
   sendHeartbeat(ws);
+  syncCodexSessions(ws);
   heartbeatTimer = setInterval(() => {
     sendHeartbeat(ws);
+    syncCodexSessions(ws);
   }, AGENT_HEARTBEAT_INTERVAL_MS);
 }
 
@@ -570,6 +648,32 @@ function connect() {
               ? `审批已通过，可以继续执行。${normalizeText(payload.note) || ""}`.trim()
               : `审批被拒绝：${normalizeText(payload.note) || "请等待进一步指示"}`,
         });
+
+        // Forward approval decision to the active Codex runtime process
+        if (runtimeAdapter.resolveApproval) {
+          runtimeAdapter.resolveApproval(decision);
+        }
+        return;
+      }
+
+      // Handle user intervention message sent to an in-progress task
+      if (payload.type === "intervene_task") {
+        const activeRun = runtimeAdapter.getActiveRun?.();
+        if (activeRun && normalizeText(payload.text)) {
+          activeRun.sendInput(normalizeText(payload.text) + "\n");
+          sendJson(ws, buildProgressEvent(
+            {
+              conversationId: normalizeText(payload.conversationId),
+              taskId: runtimeState.currentTaskId,
+            },
+            {
+              status: "in_progress",
+              runId: runtimeState.currentRunId,
+              runStatus: "running",
+              summary: `收到干预指令：${normalizeText(payload.text)}`,
+            }
+          ));
+        }
         return;
       }
 
@@ -619,9 +723,48 @@ function connect() {
       );
 
       const runtimeInput = await enrichIncomingMessage(payload.message, payload.conversation);
+
+      // Progress callback: stream intermediate updates to Hub in real-time
+      const onProgress = (info) => {
+        sendJson(ws, buildProgressEvent(
+          {
+            conversationId: payload.conversationId,
+            replyTo: messageId,
+            task: taskPayload,
+          },
+          {
+            status: "in_progress",
+            runId,
+            runStatus: "running",
+            summary: info.summary || info.fullText || "执行中...",
+          }
+        ));
+      };
+
+      // Approval callback: when Codex needs human confirmation, push to Hub
+      const onApprovalNeeded = (info) => {
+        updateRuntimeState({
+          status: "waiting_approval",
+          currentTaskId: taskId,
+          currentRunId: runId,
+          summary: `等待审批：${info.reason}`,
+        });
+        sendJson(ws, {
+          type: "approval.requested",
+          taskId,
+          runId,
+          reason: info.reason || "Codex 需要确认才能继续",
+          scope: info.scope || null,
+          requestedAction: info.requestedAction || null,
+          riskLevel: info.riskLevel || "medium",
+        });
+      };
+
       const reply = await runtimeAdapter.reply({
         conversation: runtimeInput.conversation,
         message: runtimeInput.message,
+        onProgress,
+        onApprovalNeeded,
       });
 
       if (reply.recentCodexSessions) {

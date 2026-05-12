@@ -4101,6 +4101,71 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      // Forward user intervention to the agent that owns the task
+      if (payload.type === "intervene_task" && socket.clientRole === "app") {
+        const taskId = normalizeText(payload.taskId);
+        const text = normalizeText(payload.text);
+        if (!taskId || !text) {
+          sendJson(socket, {
+            type: "intervene_task_result",
+            ok: false,
+            error: "MISSING_PARAMS",
+            message: "干预需要 taskId 和 text",
+          });
+          return;
+        }
+
+        const task = store.getTask(taskId);
+        if (!task) {
+          sendJson(socket, {
+            type: "intervene_task_result",
+            ok: false,
+            error: "TASK_NOT_FOUND",
+            message: "找不到对应任务",
+          });
+          return;
+        }
+
+        const agentSocket = agentClients.get(task.ownerEmployeeId)?.socket || null;
+        if (!agentSocket) {
+          sendJson(socket, {
+            type: "intervene_task_result",
+            ok: false,
+            error: "AGENT_OFFLINE",
+            message: "执行该任务的员工当前不在线",
+          });
+          return;
+        }
+
+        sendJson(agentSocket, {
+          type: "intervene_task",
+          taskId,
+          conversationId: task.conversationId || task.directConversationId || null,
+          text,
+        });
+
+        // Persist intervention as a user message in the conversation
+        const interventionConversationId = task.conversationId || task.directConversationId;
+        if (interventionConversationId) {
+          const interventionMessage = {
+            id: randomUUID(),
+            role: "user",
+            text: `[干预] ${text}`,
+            createdAt: new Date().toISOString(),
+          };
+          await store.addMessage(interventionConversationId, interventionMessage);
+        }
+
+        sendJson(socket, {
+          type: "intervene_task_result",
+          ok: true,
+          taskId,
+          message: "干预指令已发送",
+        });
+        broadcastSnapshot();
+        return;
+      }
+
       if (payload.type === "agent_codex_sessions" && socket.clientRole === "agent") {
         const agentId = socket.agentId;
         if (!agentId) {
@@ -4265,6 +4330,23 @@ wss.on("connection", (socket) => {
           lastSummary: normalizeText(payload.summary) || task.latestSummary,
           lastSeenAt: new Date().toISOString(),
         });
+
+        // Broadcast progress event directly to app clients for real-time streaming
+        const progressEvent = {
+          type: "task_progress",
+          taskId,
+          runId: normalizeText(payload.runId) || task.runId || `run-${task.id}`,
+          status: nextTaskStatus,
+          runStatus: normalizeRunStatus(payload.runStatus) || task.runStatus,
+          summary: normalizeText(payload.summary) || null,
+          updatedAt: new Date().toISOString(),
+        };
+        for (const client of wss.clients) {
+          if (client.readyState === 1 && client.clientRole === "app") {
+            sendJson(client, progressEvent);
+          }
+        }
+
         broadcastSnapshot();
         return;
       }

@@ -51,6 +51,31 @@
 
       <div id="task-status-badges" class="chips task-status-badges"></div>
       <div id="task-context-grid" class="context-grid task-context-grid"></div>
+
+      <section class="sheet-stack" id="task-progress-stream-section" hidden>
+        <article class="soft-sheet">
+          <strong>实时进展</strong>
+          <div id="task-progress-stream" class="progress-stream"></div>
+        </article>
+      </section>
+
+      <section id="task-intervene-section" class="intervene-section" hidden>
+        <article class="soft-sheet">
+          <strong>干预任务</strong>
+          <p class="muted">向正在执行中的 Codex 发送指令或反馈</p>
+          <div class="intervene-input-row">
+            <input
+              type="text"
+              id="intervene-input"
+              class="intervene-input"
+              placeholder="输入干预指令..."
+              autocomplete="off"
+            />
+            <button type="button" id="intervene-send-btn" class="primary-btn">发送</button>
+          </div>
+        </article>
+      </section>
+
       <section id="task-resource-list" class="jump-card-stack"></section>
       <section id="task-approval-list" class="jump-card-stack"></section>
     </main>
