@@ -1118,6 +1118,25 @@ function getActiveConversation() {
   );
 }
 
+function upsertConversation(conversation) {
+  if (!conversation?.id) {
+    return null;
+  }
+
+  const existingIndex = state.conversations.findIndex(
+    (item) => item.id === conversation.id
+  );
+  if (existingIndex === -1) {
+    state.conversations = [conversation, ...state.conversations];
+    return conversation;
+  }
+
+  state.conversations = state.conversations.map((item, index) =>
+    index === existingIndex ? { ...item, ...conversation } : item
+  );
+  return state.conversations[existingIndex];
+}
+
 function ensureMobileView() {
   if (!["devices", "threads", "chat"].includes(state.ui.mobileView)) {
     state.ui.mobileView = "devices";
@@ -2925,9 +2944,9 @@ function connect() {
 
     if (payload.type === "conversation_opened" && payload.conversationId) {
       state.pendingConversationId = payload.conversationId;
-      const conversation = state.conversations.find(
-        (item) => item.id === payload.conversationId
-      );
+      const conversation =
+        upsertConversation(payload.conversation) ||
+        state.conversations.find((item) => item.id === payload.conversationId);
       if (conversation) {
         state.activeAgentId = conversation.agentId;
         state.activeDeviceId =
@@ -2940,6 +2959,8 @@ function connect() {
           setMobileView("chat", { skipPersist: true });
         }
         render();
+      } else {
+        refreshSnapshot();
       }
       return;
     }

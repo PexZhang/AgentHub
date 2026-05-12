@@ -3891,6 +3891,7 @@ wss.on("connection", (socket) => {
         sendJson(socket, {
           type: "conversation_opened",
           conversationId: conversation.id,
+          conversation,
         });
         return;
       }
@@ -3947,6 +3948,7 @@ wss.on("connection", (socket) => {
         sendJson(socket, {
           type: "conversation_opened",
           conversationId: conversation.id,
+          conversation,
         });
         return;
       }
