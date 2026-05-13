@@ -2594,7 +2594,10 @@ function buildManagerChatHistory() {
     .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
     .map((message) => ({
       role: message.role,
-      content: normalizeText(message.text),
+      content:
+        message.role === "assistant"
+          ? sanitizeAssistantStatusContent(normalizeText(message.text))
+          : normalizeText(message.text),
     }));
 
   // Only keep recent messages to avoid stale context confusing the model
@@ -2604,6 +2607,19 @@ function buildManagerChatHistory() {
     { role: "system", content: buildManagerInstructions() },
     ...recentMessages,
   ];
+}
+
+// Strip online/offline status details from historical assistant messages
+// to prevent model from copying stale status data instead of calling tools.
+function sanitizeAssistantStatusContent(text) {
+  if (!text) return text;
+  // If the message looks like a status report (contains online/offline indicators),
+  // replace it with a note that forces tool use
+  const statusIndicators = /(在线员工|离线员工|在线情况|员工总数|位员工在线|位离线|online|offline)/i;
+  if (statusIndicators.test(text)) {
+    return "[此条为历史状态回复，数据已过期。回答状态问题时必须调用 list_employees 工具获取实时数据。]";
+  }
+  return text;
 }
 
 async function createCompatibleChatManagerResponse(messages) {
@@ -3345,6 +3361,7 @@ async function runLocalManager(text) {
 }
 
 async function runManager(text) {
+
   if (MANAGER_PROVIDER === "openai") {
     try {
       return await runOpenAIManager(text);
