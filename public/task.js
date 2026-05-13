@@ -382,6 +382,35 @@ function buildEmployeeHref(task, conversation, agent, deviceName) {
   return `/employee.html?${params.toString()}`;
 }
 
+let redirectedToConversationGateway = false;
+
+function redirectToConversationGateway(task, conversation, agent) {
+  if (redirectedToConversationGateway || state.auth.promptOpen) {
+    return false;
+  }
+
+  const agentId = task?.agentId || agent?.id || conversation?.agentId || route.agentId;
+  const conversationId = conversation?.id || task?.conversationId || route.conversationId;
+  if (!agentId && !conversationId) {
+    return false;
+  }
+
+  const deviceName = agent?.deviceName || task?.deviceName || route.deviceName || "";
+  const href = buildEmployeeHref(
+    task ? { ...task, agentId } : { agentId },
+    conversation,
+    agent,
+    deviceName
+  );
+  if (!href) {
+    return false;
+  }
+
+  redirectedToConversationGateway = true;
+  window.location.replace(href);
+  return true;
+}
+
 function buildApprovalHref(task, approval) {
   if (!approval?.id) {
     return "";
@@ -522,7 +551,7 @@ function renderActionCard(task, conversation, agent, workspace, approvals) {
       <div class="actions">
         ${
           employeeHref
-            ? `<a class="ghost-btn" href="${escapeHtml(employeeHref)}">查看员工</a>`
+            ? `<a class="ghost-btn" href="${escapeHtml(employeeHref)}">会话入口</a>`
             : ""
         }
         ${
@@ -596,7 +625,7 @@ function renderTaskView(task, conversation, agent, workspace, approvals) {
       ? `任务 ${route.taskId} 目前不在快照里，可能已经被删除或还未同步。`
       : "当前没有可展示的任务。";
     taskGoal.textContent = "请返回 AI 经理，让我重新定位你要查看的任务。";
-    taskProgress.textContent = "任务详情为空时，不建议直接跳员工直连，以免打断错误对象。";
+    taskProgress.textContent = "没有明确员工或会话时，先回到 AI 经理重新定位。";
     taskStatusBadges.innerHTML = "";
     taskContextGrid.innerHTML = "";
     if (taskResourceList) {
@@ -730,6 +759,10 @@ function render() {
   const agent = findAgent(snapshot, task);
   const workspace = findWorkspace(snapshot, task);
   const approvals = listApprovals(snapshot, task);
+
+  if (redirectToConversationGateway(task, conversation, agent)) {
+    return;
+  }
 
   renderTaskView(task, conversation, agent, workspace, approvals);
   renderProgressStream(task);

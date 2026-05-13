@@ -8,7 +8,7 @@
     />
     <title>AgentHub · 资源详情</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=workspace-polish" />
   </head>
   <body class="page page-task page-resource" data-page="resource">
     <section id="auth-modal" class="auth-entry" hidden>
@@ -28,17 +28,16 @@
 
       <section class="surface-card hero-card task-hero">
         <div class="hero-copy compact">
-          <p class="section-kicker">Resource</p>
+          <p class="section-kicker">资源</p>
           <h1 id="resource-title">正在读取资源</h1>
           <p class="muted" id="resource-subtitle">
-            这里展示资源状态、关联任务和正文摘录。
+            先看内容，再回到会话里继续处理。
           </p>
           <p class="muted task-page-subtitle" id="resource-page-subtitle"></p>
         </div>
       </section>
 
       <div id="resource-status-badges" class="chips task-status-badges"></div>
-      <div id="resource-meta-grid" class="context-grid task-context-grid"></div>
 
       <section class="sheet-stack">
         <article class="soft-sheet">
@@ -53,8 +52,13 @@
       </section>
 
       <section id="resource-actions" class="jump-card-stack"></section>
+
+      <details class="surface-card meta-disclosure">
+        <summary>资源信息</summary>
+        <div id="resource-meta-grid" class="context-grid task-context-grid"></div>
+      </details>
     </main>
 
-    <script type="module" src="/resource.js"></script>
+    <script type="module" src="/resource.js?v=mobile-pm"></script>
   </body>
 </html>

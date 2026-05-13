@@ -248,10 +248,12 @@ function buildAttentionItems(snapshot) {
         key: `approval-${approval.id}`,
         level: "warning",
         title: "有任务在等你拍板",
-        body: `${task?.title || "未命名任务"} 正在等待审批。原因：${approval.reason || "需要确认风险操作"}`,
-        primaryLabel: "查看任务",
-        primaryHref: task ? buildTaskHref(task) : "/",
-        secondaryLabel: "回经理处理",
+        body: `${task?.title || "未命名任务"}：${approval.reason || "需要确认风险操作"}`,
+        primaryLabel: "去确认",
+        primaryHref: task
+          ? `/approval.html?approvalId=${encodeURIComponent(approval.id)}&taskId=${encodeURIComponent(task.id)}`
+          : "/approval.html",
+        secondaryLabel: "问经理",
         secondaryHref: buildManagerPromptHref(`帮我处理待审批任务 ${task?.title || approval.id}`),
       });
     });
@@ -267,16 +269,18 @@ function buildAttentionItems(snapshot) {
         body: `${task.agentName || "某位员工"} 在 ${task.deviceName || "当前设备"} 上处理“${
           task.title
         }”时遇到阻塞。${normalizeText(task.blockedReason || task.progressSummary)}`,
-        primaryLabel: "查看任务",
-        primaryHref: buildTaskHref(task),
-        secondaryLabel: "去直连纠偏",
-        secondaryHref: buildDirectHref(
+        primaryLabel: "去会话",
+        primaryHref: buildDirectHref(
           agents.find((agent) => agent.id === task.agentId) || {
             id: task.agentId,
             name: task.agentName,
             deviceName: task.deviceName,
           },
           task
+        ),
+        secondaryLabel: "问经理",
+        secondaryHref: buildManagerPromptHref(
+          `帮我看看 ${task.agentName || "这位员工"} 的任务 ${task.title} 卡在哪里，给我一个简短处理建议`
         ),
       });
     });
@@ -292,9 +296,16 @@ function buildAttentionItems(snapshot) {
         body: `${task.agentName || "某位员工"} 的“${task.title}”已经 ${formatRelativeMinutes(
           task.updatedAt
         )} 没有新的进展。`,
-        primaryLabel: "查看任务",
-        primaryHref: buildTaskHref(task),
-        secondaryLabel: "让经理跟进",
+        primaryLabel: "去会话",
+        primaryHref: buildDirectHref(
+          agents.find((agent) => agent.id === task.agentId) || {
+            id: task.agentId,
+            name: task.agentName,
+            deviceName: task.deviceName,
+          },
+          task
+        ),
+        secondaryLabel: "问经理",
         secondaryHref: buildManagerPromptHref(
           `帮我看看 ${task.agentName || "这位员工"} 的任务 ${task.title} 为什么停下来了，给我一个简短结论`
         ),
@@ -317,9 +328,9 @@ function buildAttentionItems(snapshot) {
         body: `${agent.name} 在 ${agent.deviceName || "未知设备"} 上离线了，但“${
           task.title
         }”还处于 ${task.statusLabel}。`,
-        primaryLabel: "查看任务",
-        primaryHref: buildTaskHref(task),
-        secondaryLabel: "让经理重新评估",
+        primaryLabel: "去会话",
+        primaryHref: buildDirectHref(agent, task),
+        secondaryLabel: "问经理",
         secondaryHref: buildManagerPromptHref(
           `帮我评估 ${agent.name} 当前离线的任务 ${task.title} 应该继续等、重派，还是切我去直连`
         ),

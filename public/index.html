@@ -8,7 +8,7 @@
     />
     <title>AgentHub</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=workspace-polish" />
   </head>
   <body class="page manager-home" data-page="manager">
     <section id="auth-modal" class="auth-entry" hidden>
@@ -36,14 +36,14 @@
                   <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
                   <span class="brand-wordmark">AgentHub</span>
                 </div>
-                <h1>AI 经理工作台</h1>
+                <h1>AI 经理</h1>
                 <p class="muted">
-                  直接把目标交给我。你不用先选设备、员工或目录，只有要看细节时我再带你下钻。
+                  直接说目标。我来判断找谁、接哪个会话、是否需要你拍板。
                 </p>
               </div>
               <div class="topbar-actions">
-                <a class="nav-pill secondary" href="/direct.html">设备会话</a>
-                <a class="nav-pill secondary" href="/commander.html">指挥总览</a>
+                <a class="nav-pill secondary" href="/direct.html">会话</a>
+                <a class="nav-pill secondary" href="/commander.html">异常</a>
                 <div class="status-dot-row">
                   <span class="status-dot" id="socket-dot"></span>
                   <span id="socket-text">正在连接</span>
@@ -57,7 +57,7 @@
                   <p class="section-kicker">Manager</p>
                   <h2>告诉我你现在想推进什么</h2>
                   <p class="muted" id="manager-subtitle">
-                    直接问我任务、员工状态或进度。只有你要深入看某位员工时，我才给你跳转卡片。
+                    直接问员工状态、任务进展，或者让我切到某位员工。
                   </p>
                 </div>
                 <button
@@ -81,13 +81,13 @@
           <textarea
             id="manager-input"
             rows="1"
-            placeholder="比如：现在我的员工有哪些 / 他们现在在做什么 / 帮我看看 Codex Agent 的进度"
+            placeholder="比如：现在谁在线 / 帮我切到 Codex Mobile / 看看任务进度"
           ></textarea>
           <button type="button" id="manager-send-button">发送给经理</button>
         </form>
       </section>
     </main>
 
-    <script type="module" src="/manager.js"></script>
+    <script type="module" src="/manager.js?v=workspace-polish"></script>
   </body>
 </html>

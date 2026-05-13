@@ -1796,8 +1796,8 @@ async function getTaskStatusTool(args = {}) {
       task,
     },
     clientAction: buildTaskDetailAction(task, {
-      description: "查看这条任务的完整状态、工作区和相关会话，再决定是否继续追问或切到直连。",
-      label: "查看任务详情",
+      description: "直接打开相关会话，继续追问或切到员工沟通。",
+      label: "进入会话",
     }),
   };
 }
@@ -2084,8 +2084,8 @@ function buildEmployeeDetailAction(agent, conversation = null, overrides = {}) {
     title: overrides.title || `${agent.name} · ${agent.deviceName}`,
     description:
       overrides.description ||
-      "进入该员工的直连页，查看当前任务、上下文和最近对话。",
-    label: overrides.label || `查看 ${agent.name} 的详情`,
+      "进入该员工的会话入口，切换会话或开启新会话。",
+    label: overrides.label || `进入 ${agent.name} 的会话`,
   };
 }
 
@@ -2101,11 +2101,11 @@ function buildTaskDetailAction(task, overrides = {}) {
     agentId: task.agentId || null,
     agentName: task.agentName || null,
     deviceName: task.deviceName || null,
-    title: overrides.title || `任务详情 · ${task.title || "未命名任务"}`,
+    title: overrides.title || `会话入口 · ${task.title || "未命名任务"}`,
     description:
       overrides.description ||
-      "查看这条任务的状态、工作区、最近进展和相关会话，再决定是否要直连员工。",
-    label: overrides.label || "查看任务详情",
+      "直接打开相关员工和会话，用最少步骤继续沟通。",
+    label: overrides.label || "进入会话",
   };
 }
 
@@ -2257,8 +2257,8 @@ async function assignTaskToEmployeeTool(args = {}) {
       message: taskDraft.managerSummary,
     },
     clientAction: buildTaskDetailActionFromStoredTask(result.task, latestSnapshot, {
-      description: "任务已经交给这位员工，先看任务详情；如果需要，再从详情页进入直连。",
-      label: `查看 ${employee.name} 的任务`,
+      description: "任务已经交给这位员工，直接进入会话继续沟通。",
+      label: `进入 ${employee.name} 的会话`,
     }),
   };
 }
@@ -2311,11 +2311,11 @@ async function getEmployeeStatusTool(args = {}) {
     },
     clientAction:
       buildTaskDetailAction(currentTask, {
-        description: "先查看这位员工当前任务的细节；如果需要，再从详情页进入直连。",
-        label: `查看 ${matches[0].name} 的当前任务`,
+        description: "直接进入这位员工的相关会话，继续追问或补充要求。",
+        label: `进入 ${matches[0].name} 的会话`,
       }) ||
       buildEmployeeDetailAction(matches[0], recentConversation, {
-        description: "查看这位员工的执行细节；如果需要，你可以继续直接指导他。",
+        description: "进入这位员工的会话入口，切换会话或开启新会话。",
       }),
   };
 }
@@ -2375,7 +2375,7 @@ async function diagnoseEmployeeIssueTool(args = {}) {
     diagnosis = `这位员工当前任务“${task.title}”已经阻塞。`;
     recommendedAction = normalizeText(task.blockedReason)
       ? `阻塞原因是：${task.blockedReason}。建议先追这个阻塞点。`
-      : "建议先查看任务详情，确认阻塞点。";
+      : "建议进入会话直接追问阻塞点。";
   } else if (task?.active && isOlderThan(task.updatedAt, STALE_TASK_MINUTES)) {
     diagnosis = `这位员工当前任务“${task.title}”已经 ${formatRelativeMinutes(task.updatedAt)} 没有新进展。`;
     recommendedAction = "建议先催他汇报当前卡点和下一步计划。";
@@ -3331,7 +3331,7 @@ async function runLocalManager(text) {
       action:
         pendingApprovals.length === 1
           ? buildApprovalTaskAction(snapshot, pendingApprovals[0], {
-              description: "这条任务正在等待你的批准或拒绝，先看任务详情和上下文，再做决定。",
+              description: "这条任务正在等待你的批准或拒绝，先进入相关会话确认上下文。",
               label: "查看待审批任务",
             })
           : null,

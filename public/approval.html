@@ -8,7 +8,7 @@
     />
     <title>AgentHub · 审批确认</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=workspace-polish" />
   </head>
   <body class="page page-approval" data-page="approval">
     <section id="auth-modal" class="auth-entry" hidden>
@@ -28,10 +28,10 @@
 
       <section class="surface-card hero-card approval-hero">
         <div class="hero-copy compact">
-          <p class="section-kicker">Approval</p>
+          <p class="section-kicker">待确认</p>
           <h1 id="approval-title">正在读取审批</h1>
           <p class="muted" id="approval-subtitle">
-            这里只处理一个审批事项，不把审批页变成列表广场。
+            看清影响后，批准或拒绝。
           </p>
         </div>
       </section>
@@ -48,14 +48,17 @@
         </article>
       </section>
 
-      <label class="note-field" id="approval-note-field">
-        <span>给数字员工的说明</span>
-        <textarea
-          id="approval-note-input"
-          rows="3"
-          placeholder="可选：补充批准或拒绝的说明"
-        ></textarea>
-      </label>
+      <details class="surface-card note-disclosure">
+        <summary>补充说明（可选）</summary>
+        <label class="note-field" id="approval-note-field">
+          <span>给数字员工的说明</span>
+          <textarea
+            id="approval-note-input"
+            rows="3"
+            placeholder="补充批准或拒绝的说明"
+          ></textarea>
+        </label>
+      </details>
 
       <div id="approval-feedback" class="approval-feedback" hidden></div>
 
@@ -67,6 +70,6 @@
       </div>
     </main>
 
-    <script type="module" src="/approval.js"></script>
+    <script type="module" src="/approval.js?v=mobile-pm"></script>
   </body>
 </html>

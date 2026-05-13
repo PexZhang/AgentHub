@@ -588,7 +588,9 @@ function buildActionHref(action) {
       params.set("deviceName", action.deviceName);
     }
 
-    return `/task.html?${params.toString()}`;
+    return action.agentId || action.conversationId
+      ? `/employee.html?${params.toString()}`
+      : `/task.html?${params.toString()}`;
   }
 
   if (action.type === "switch_direct") {
@@ -655,18 +657,18 @@ function renderManagerActionCard(action) {
   const title =
     action.title ||
     (action.type === "open_task_detail"
-      ? "查看任务详情"
+      ? "打开会话入口"
       : action.type === "open_resource_detail"
         ? `查看 ${action.resourceName || action.resourceId} 的资源细节`
-        : `查看 ${action.agentName || action.agentId} 的执行细节`);
+        : `打开 ${action.agentName || action.agentId} 的会话入口`);
   const description =
     action.description ||
     (action.type === "open_task_detail"
-      ? "先看任务状态、工作区和最近进展，再决定要不要直连员工。"
+      ? "直接切到相关员工和会话，继续沟通或开新会话。"
       : action.type === "open_resource_detail"
         ? "先看资源状态、关联任务和正文摘录，再决定是否继续追问。"
-        : "先查看这位员工的状态、线程和工作目录，再决定是否直接进入聊天。");
-  const buttonLabel = action.label || "查看详情并跳转";
+        : "进入该员工的会话入口，切换会话或开启新会话。");
+  const buttonLabel = action.label || "进入会话";
 
   return `
     <div class="manager-action-card">

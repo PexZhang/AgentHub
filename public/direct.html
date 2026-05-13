@@ -8,7 +8,7 @@
     />
     <title>AgentHub · 员工直聊</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=workspace-polish" />
   </head>
   <body class="page direct-home page-direct" data-page="direct">
     <section id="auth-modal" class="auth-entry" hidden>
@@ -36,13 +36,13 @@
                   <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
                   <span class="brand-wordmark">AgentHub</span>
                 </div>
-                <h1>员工直连台</h1>
+                <h1>直连会话</h1>
                 <p class="muted">
-                  这里只保留你和当前数字员工的直接对话。想回上层时，再返回员工概览或 AI 经理。
+                  这里只和当前数字员工对话；换会话时回到会话入口。
                 </p>
               </div>
               <div class="topbar-actions">
-                <a class="nav-pill secondary" id="direct-back-link" href="/employee.html">返回员工概览</a>
+                <a class="nav-pill secondary" id="direct-back-link" href="/employee.html">会话入口</a>
                 <div class="status-dot-row">
                   <span class="status-dot" id="socket-dot"></span>
                   <span id="socket-text">正在连接</span>
@@ -53,10 +53,10 @@
             <section id="direct-context-body" class="surface-card intro-card">
               <div class="panel-title-row">
                 <div>
-                  <p class="section-kicker">Direct</p>
+                  <p class="section-kicker">当前会话</p>
                   <h2 id="conversation-title">等待直连员工</h2>
                   <p class="muted" id="conversation-subtitle">
-                    AI 经理会在需要时把你带到这里，和某位数字员工直接沟通。
+                    直接给这位数字员工补充要求或追问进展。
                   </p>
                 </div>
                 <button
@@ -91,11 +91,11 @@
           <textarea
             id="message-input"
             rows="1"
-            placeholder="发送消息，直接下达要求或追问当前进展"
+              placeholder="直接下达要求或追问进展"
           ></textarea>
           <div class="composer-actions-row">
             <button type="button" id="resource-picker-button" class="secondary-button">
-              上传文本
+              附件
             </button>
             <button type="button" id="send-button">发送</button>
           </div>
@@ -103,6 +103,6 @@
       </section>
     </main>
 
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=mobile-pm"></script>
   </body>
 </html>

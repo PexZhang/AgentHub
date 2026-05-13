@@ -8,7 +8,7 @@
     />
     <title>AgentHub · 指挥总览</title>
     <link rel="icon" href="/assets/agenthub-logo-a-triad.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=workspace-polish" />
   </head>
   <body class="page page-commander commander-home">
     <section id="auth-modal" class="auth-entry" hidden>
@@ -22,9 +22,9 @@
             <img class="brand-mark" src="/assets/agenthub-logo-a-triad.svg" alt="" />
             <span class="brand-wordmark">AgentHub</span>
           </div>
-          <h1>指挥总览</h1>
+          <h1>异常与待处理</h1>
           <p class="muted" id="commander-subtitle">
-            这里只展示你真正需要盯的内容：谁在做什么、在哪台设备、哪个工作区、是否需要你介入。
+            只放需要你介入的事。正常运行的员工先收起来。
           </p>
         </div>
         <div class="topbar-actions">
@@ -39,9 +39,9 @@
       <section class="panel commander-summary-panel">
         <div class="panel-title-row">
           <div>
-            <h2>当前态势</h2>
+            <h2>现在要不要管</h2>
             <p class="muted" id="commander-sync-note">
-              你换设备打开这个页面时，会读到同一份 AgentHub 状态快照。
+              有审批、阻塞、掉线或长时间无更新时再进来处理。
             </p>
           </div>
           <span class="muted" id="commander-generated-at">等待同步</span>
@@ -52,9 +52,9 @@
       <section class="panel commander-attention-panel">
         <div class="panel-title-row">
           <div>
-            <h2>需要你关注</h2>
+            <h2>需要处理</h2>
             <p class="muted">
-              我把阻塞、待审批、长时间无更新、员工离线但任务未结束这些情况提前提给你。
+              每条只保留判断和下一步动作。
             </p>
           </div>
         </div>
@@ -64,9 +64,9 @@
       <section class="panel commander-employees-panel">
         <div class="panel-title-row">
           <div>
-            <h2>员工态势</h2>
+            <h2>员工状态</h2>
             <p class="muted">
-              每个员工卡片只展示你最常看的信息，并给出纠偏入口。
+              默认只看状态和入口，更多细节回到会话里问。
             </p>
           </div>
           <span class="muted" id="commander-employee-count">0 位员工</span>
@@ -75,6 +75,6 @@
       </section>
     </div>
 
-    <script type="module" src="/commander.js"></script>
+    <script type="module" src="/commander.js?v=workspace-polish"></script>
   </body>
 </html>

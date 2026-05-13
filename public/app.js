@@ -217,9 +217,8 @@ const employeeThreadEntry = document.querySelector("#employee-thread-entry");
 const employeeThreadCopy = document.querySelector("#employee-thread-copy");
 const employeeSessionEntry = document.querySelector("#employee-session-entry");
 const employeeSessionCopy = document.querySelector("#employee-session-copy");
-const employeeWorkdirEntry = document.querySelector("#employee-workdir-entry");
-const employeeWorkdirCopy = document.querySelector("#employee-workdir-copy");
 const employeeEnterChat = document.querySelector("#employee-enter-chat");
+const employeeConversationList = document.querySelector("#employee-conversation-list");
 let directOverlayResizeBound = false;
 
 function syncDirectComposerHeight() {
@@ -1550,7 +1549,10 @@ function openManagerAction(action) {
     if (action.deviceName) {
       params.set("deviceName", action.deviceName);
     }
-    window.location.href = `/task.html?${params.toString()}`;
+    const hasConversationTarget = Boolean(action.agentId || action.conversationId);
+    window.location.href = hasConversationTarget
+      ? `/employee.html?${params.toString()}`
+      : `/task.html?${params.toString()}`;
   }
 }
 
@@ -1562,14 +1564,14 @@ function renderManagerActionCard(action) {
   const title =
     action.title ||
     (action.type === "open_task_detail"
-      ? "查看任务详情"
-      : `查看 ${action.agentName || action.agentId} 的执行细节`);
+      ? "打开会话入口"
+      : `打开 ${action.agentName || action.agentId} 的会话入口`);
   const description =
     action.description ||
     (action.type === "open_task_detail"
-      ? "先看任务状态、工作区和最近进展，再决定要不要直连员工。"
-      : "进入该员工的直连页，查看当前任务、对话和上下文。");
-  const buttonLabel = action.label || "查看详情并跳转";
+      ? "直接切到相关员工和会话，继续沟通或开新会话。"
+      : "进入该员工的会话入口，切换会话或开启新会话。");
+  const buttonLabel = action.label || "进入会话";
 
   return `
     <div class="manager-action-card">
@@ -1589,23 +1591,31 @@ function renderManagerActionCard(action) {
 }
 
 function applyLaunchTarget() {
-  if (state.launchTarget.applied || !state.launchTarget.agentId) {
+  if (state.launchTarget.applied) {
     return;
   }
 
-  const agent = getAgent(state.launchTarget.agentId);
+  const targetConversation = state.launchTarget.conversationId
+    ? state.conversations.find((item) => item.id === state.launchTarget.conversationId)
+    : null;
+  const targetAgentId = state.launchTarget.agentId || targetConversation?.agentId || null;
+  if (!targetAgentId) {
+    return;
+  }
+
+  const agent = getAgent(targetAgentId);
   if (!agent) {
     return;
   }
 
   state.launchTarget.applied = true;
   state.directFocus = {
-    agentId: state.launchTarget.agentId,
+    agentId: targetAgentId,
     conversationId: state.launchTarget.conversationId || null,
     agentName: state.launchTarget.agentName || agent.name,
     deviceName: state.launchTarget.deviceName || agent.deviceName,
   };
-  selectAgent(state.launchTarget.agentId);
+  selectAgent(targetAgentId);
 
   if (state.launchTarget.conversationId) {
     state.activeConversationId = state.launchTarget.conversationId;
@@ -2201,12 +2211,10 @@ function renderMessageToolbar(agent, conversation) {
     return;
   }
 
-  const messageCount = conversation?.messages?.length || 0;
   const lastMessage = getLastMessage(conversation);
-  const deviceName = (agent && (agent.deviceName || getDevice(agent.deviceId)?.name)) || "未选择";
   const statusText = state.messageViewport.showJumpButton ? "正在查看历史消息" : "跟随最新消息";
   const pills = [
-    `设备 ${deviceName}`,
+    agent?.online ? "在线" : "离线",
     conversation?.title || "新会话",
     lastMessage ? `最近更新 ${formatUpdatedAt(lastMessage.createdAt)}` : "等待第一条消息",
   ];
@@ -2216,7 +2224,7 @@ function renderMessageToolbar(agent, conversation) {
     pills.splice(
       2,
       0,
-      `目录 ${conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "未设置"}`
+      `目录 ${getLeafName(conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "")}`
     );
     pills.splice(
       3,
@@ -2226,7 +2234,7 @@ function renderMessageToolbar(agent, conversation) {
         : "首次回复后创建会话"
     );
   } else {
-    pills.splice(2, 0, `运行时 ${getRuntimeLabel(agent)}`);
+    pills.splice(2, 0, getRuntimeLabel(agent));
   }
 
   pills.push(statusText);
@@ -2240,17 +2248,13 @@ function renderMessageToolbar(agent, conversation) {
 
 function buildDirectCollapsedSummary(agent, conversation, activeTask) {
   if (!agent) {
-    return "展开后查看当前直连员工、设备和线程状态。";
+    return "选择一位数字员工后开始直连。";
   }
 
-  const deviceName =
-    agent.deviceName || conversation?.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
-  const parts = [agent.name, `设备 ${deviceName}`, agent.online ? "在线" : "离线"];
+  const parts = [agent.name, agent.online ? "在线" : "离线"];
 
   if (conversation?.title) {
-    parts.push(`线程 ${conversation.title}`);
-  } else {
-    parts.push("等待线程");
+    parts.push(conversation.title);
   }
 
   if (conversation?.messages?.length) {
@@ -2258,7 +2262,7 @@ function buildDirectCollapsedSummary(agent, conversation, activeTask) {
   }
 
   if (activeTask?.title) {
-    parts.push(`任务 ${activeTask.title}`);
+    parts.push(activeTask.title);
   }
 
   return parts.join(" · ");
@@ -2418,7 +2422,7 @@ function renderMessages() {
 
   if (!state.activeAgentId || !agent) {
     conversationTitle.textContent = "等待直连员工";
-    conversationSubtitle.textContent = "从员工概览页进入后，你可以在这里和某位数字员工直接沟通。";
+    conversationSubtitle.textContent = "先从会话入口选择一位数字员工。";
     renderThreadStrip(null);
     renderMessageToolbar(null, null);
     renderDirectContextPanel(null, null, null);
@@ -2436,13 +2440,13 @@ function renderMessages() {
 
   conversationTitle.textContent = agent.name;
   if (!agent.online) {
-    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工离线，新消息会先排队，等它重新连接后再投递。`;
+    conversationSubtitle.textContent = `离线 · 消息会先排队，等它重新连接后再投递。`;
   } else if (activeTask?.title) {
-    conversationSubtitle.textContent = `当前任务：${activeTask.title}${conversation?.title ? ` · 线程 ${conversation.title}` : ""}`;
+    conversationSubtitle.textContent = `${activeTask.title}${conversation?.title ? ` · ${conversation.title}` : ""}`;
   } else if (conversation?.title) {
-    conversationSubtitle.textContent = `设备 ${deviceName} · 当前线程 ${conversation.title}`;
+    conversationSubtitle.textContent = `在线 · ${conversation.title}`;
   } else {
-    conversationSubtitle.textContent = `设备 ${deviceName} · 当前数字员工运行时：${getRuntimeLabel(agent)}`;
+    conversationSubtitle.textContent = "在线 · 等你发第一条消息";
   }
 
   if (directBackLink) {
@@ -2475,7 +2479,7 @@ function renderMessages() {
       false
     );
     messagesNode.innerHTML =
-      '<div class="empty-card">还没有消息。发第一条消息试试看。</div>';
+      '<div class="empty-card compact-empty"><strong>还没有消息</strong><p>直接告诉这位数字员工要做什么，第一条消息会创建或接上会话。</p></div>';
     state.messageViewport.lastConversationId = conversationId;
     state.messageViewport.lastMessageCount = 0;
     messageJumpButton.hidden = true;
@@ -2622,9 +2626,8 @@ function renderEmployeeOverview() {
     !employeeThreadCopy ||
     !employeeSessionEntry ||
     !employeeSessionCopy ||
-    !employeeWorkdirEntry ||
-    !employeeWorkdirCopy ||
-    !employeeEnterChat
+    !employeeEnterChat ||
+    !employeeConversationList
   ) {
     return;
   }
@@ -2634,68 +2637,72 @@ function renderEmployeeOverview() {
 
   if (!agent) {
     employeeTitle.textContent = "还没有可用员工";
-    employeeSubtitle.textContent = "等数字员工连上来后，这里会显示状态、线程和工作目录。";
+    employeeSubtitle.textContent = "等数字员工连上来后，这里会显示可继续的会话。";
     employeeStatusCopy.textContent = "当前还没有数字员工接入。";
-    employeeTaskCopy.textContent = "先运行本地 agent，再通过 AI 经理给出跳转卡片。";
+    employeeTaskCopy.textContent = "先让员工连接到 AgentHub。";
+    employeeTaskCopy.hidden = false;
     employeeContextPills.innerHTML = "";
-    employeeThreadCopy.textContent = "没有可用线程。";
-    employeeSessionCopy.textContent = "连上 Codex 员工后，这里会显示可导入的旧 session。";
-    employeeWorkdirCopy.textContent = "连上员工后，再选择工作目录。";
+    employeeThreadCopy.textContent = "连上员工后可以直接开始。";
+    employeeSessionCopy.textContent = "Codex 员工连上后可导入历史会话。";
     employeeSessionEntry.disabled = true;
-    employeeWorkdirEntry.disabled = true;
     employeeThreadEntry.disabled = true;
     employeeThreadEntry.onclick = null;
     employeeSessionEntry.onclick = null;
-    employeeWorkdirEntry.onclick = null;
     employeeEnterChat.href = "/direct.html";
     employeeEnterChat.setAttribute("aria-disabled", "true");
+    employeeConversationList.innerHTML =
+      '<div class="empty-card">当前没有可切换的会话。</div>';
     return;
   }
 
   const activeTask = getActiveTaskForAgent(agent.id);
   const deviceName = agent.deviceName || getDevice(agent.deviceId)?.name || "当前设备";
   const isCodex = agentUsesCodex(agent);
-  const workdir = conversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || "未设置工作目录";
-  const recentConversation = conversation || getConversationsForAgent(agent.id)[0] || null;
+  const conversations = getConversationsForAgent(agent.id);
+  const recentConversation = conversation || conversations[0] || null;
+  const preferredWorkdir =
+    recentConversation?.codexWorkdir || getAgentDefaultWorkdir(agent) || null;
 
   employeeTitle.textContent = agent.name;
-  employeeSubtitle.textContent = isCodex
-    ? "线程、旧 session、目录选择都轻轻放着；你只在需要时再进入聊天。"
-    : "先看当前任务和最近线程，再决定是否要亲自进入聊天。";
-  employeeStatusCopy.textContent = `${deviceName} · ${agent.online ? "在线" : "离线"} · 运行时 ${getRuntimeLabel(agent)}`;
+  employeeSubtitle.textContent = "最常用的两个动作在这里：继续聊，或开新会话。";
+  employeeStatusCopy.textContent = `${agent.online ? "在线" : "离线"}${
+    recentConversation?.title ? ` · ${recentConversation.title}` : ""
+  }`;
   employeeTaskCopy.textContent = activeTask?.title
-    ? `${activeTask.title} · ${activeTask.progressSummary || activeTask.statusLabel || "正在推进"}`
-    : agent.lastSummary || "当前没有进行中的任务，处于待命状态。";
+    ? activeTask.title
+    : "当前没有进行中的任务。";
+  employeeTaskCopy.hidden = !activeTask?.title;
   employeeContextPills.innerHTML = [
-    `设备 ${deviceName}`,
-    `运行时 ${getRuntimeLabel(agent)}`,
-    recentConversation?.updatedAt
-      ? `最近更新 ${formatUpdatedAt(recentConversation.updatedAt)}`
-      : "还没有会话",
+    `${conversations.length} 个会话`,
+    agent.online ? "在线" : "离线",
+    activeTask?.title ? "有任务" : "空闲",
   ]
     .map((item) => `<span class="pill">${escapeHtml(item)}</span>`)
     .join("");
 
-  employeeThreadCopy.textContent = recentConversation?.title
-    ? `${recentConversation.title} · ${recentConversation.updatedAt ? formatUpdatedAt(recentConversation.updatedAt) : "最近使用"}`
-    : "还没有会话，进入聊天后会自动创建。";
+  employeeThreadCopy.textContent = isCodex
+    ? preferredWorkdir
+      ? getLeafName(preferredWorkdir)
+      : "直接开始"
+    : "直接开始";
   employeeSessionCopy.textContent = isCodex
     ? agent.recentCodexSessions?.length
-      ? `已有 ${agent.recentCodexSessions.length} 个 Codex 历史 session 可导入`
-      : "当前还没有可导入的旧 session"
-    : "当前员工不是 Codex 运行时，无需导入旧 session。";
-  employeeWorkdirCopy.textContent = isCodex
-    ? workdir
-    : "当前员工不是 Codex 运行时，不需要选择工作目录。";
+      ? `${agent.recentCodexSessions.length} 个可选`
+      : "当前没有可导入的历史会话"
+    : "仅 Codex 员工支持";
 
-  employeeThreadEntry.disabled = false;
-  employeeSessionEntry.disabled = !isCodex;
-  employeeWorkdirEntry.disabled = !isCodex || !agent.online;
+  employeeThreadEntry.disabled = !state.connected;
+  employeeSessionEntry.disabled = !isCodex || !state.connected;
   employeeEnterChat.href = buildEmployeeDirectHref(agent, recentConversation);
   employeeEnterChat.removeAttribute("aria-disabled");
 
   employeeThreadEntry.onclick = () => {
-    window.location.href = buildEmployeeDirectHref(agent, recentConversation);
+    if (isCodex) {
+      requestNewCodexConversation(agent.id, preferredWorkdir);
+      return;
+    }
+
+    requestNewConversation(agent.id);
   };
 
   employeeSessionEntry.onclick = () => {
@@ -2705,12 +2712,43 @@ function renderEmployeeOverview() {
     openSessionPicker(agent.id);
   };
 
-  employeeWorkdirEntry.onclick = () => {
-    if (!isCodex || !agent.online) {
-      return;
-    }
-    openDirectoryPicker(agent, workdir === "未设置工作目录" ? "" : workdir);
-  };
+  employeeConversationList.innerHTML = conversations.length
+    ? conversations
+        .map((item) => {
+          const activeClass = item.id === recentConversation?.id ? " active" : "";
+          const meta = [
+            item.updatedAt ? formatUpdatedAt(item.updatedAt) : "暂无消息",
+            isCodex && item.codexWorkdir ? getLeafName(item.codexWorkdir) : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return `
+            <button
+              type="button"
+              class="employee-conversation-item${activeClass}"
+              data-employee-conversation-id="${escapeHtml(item.id)}"
+            >
+              <span>
+                <strong>${escapeHtml(item.title || item.codexThreadName || "New chat")}</strong>
+                <small>${escapeHtml(meta || "会话")}</small>
+              </span>
+              <span>进入</span>
+            </button>
+          `;
+        })
+        .join("")
+    : '<div class="empty-card">还没有会话。点“新会话”开始。</div>';
+
+  employeeConversationList
+    .querySelectorAll("[data-employee-conversation-id]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const targetConversation = conversations.find(
+          (item) => item.id === button.dataset.employeeConversationId
+        );
+        window.location.href = buildEmployeeDirectHref(agent, targetConversation);
+      });
+    });
 }
 
 function renderDirectoryPicker() {
@@ -2955,6 +2993,15 @@ function connect() {
           state.activeDeviceId;
         state.activeConversationId = conversation.id;
         state.pendingConversationId = null;
+        if (pageMode === "employee") {
+          const targetAgent = getAgent(conversation.agentId) || {
+            id: conversation.agentId,
+            name: conversation.agentName || null,
+            deviceName: conversation.deviceName || null,
+          };
+          window.location.href = buildEmployeeDirectHref(targetAgent, conversation);
+          return;
+        }
         if (isMobileLayout()) {
           setMobileView("chat", { skipPersist: true });
         }

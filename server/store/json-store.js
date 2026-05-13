@@ -83,11 +83,22 @@ export class JsonStore {
       }
 
       this.state = nextState;
+      this.resetPersistedPresence();
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
       }
       await this.persist();
+    }
+  }
+
+  resetPersistedPresence() {
+    for (const employee of this.state.employees || []) {
+      employee.online = false;
+    }
+
+    for (const workspace of this.state.workspaces || []) {
+      workspace.online = false;
     }
   }
 
@@ -765,6 +776,8 @@ export class JsonStore {
         .map((workspace) => [workspace.id, workspace])
     );
 
+    const liveAgentIds = new Set(connectedAgents.keys());
+
     for (const connection of connectedAgents.values()) {
       for (const workspace of connection.workspaces || []) {
         workspaceMap.set(workspace.id, {
@@ -780,6 +793,12 @@ export class JsonStore {
             connection.lastSeenAt ||
             new Date().toISOString(),
         });
+      }
+    }
+
+    for (const workspace of workspaceMap.values()) {
+      if (!liveAgentIds.has(workspace.employeeId)) {
+        workspace.online = false;
       }
     }
 
@@ -843,14 +862,12 @@ export class JsonStore {
           defaultCodexWorkdir: connection?.defaultCodexWorkdir || null,
           workdirRoots: connection?.workdirRoots || [],
           workspaces: persistedWorkspaces,
-          online: Boolean(connection) || persistedWorkspaces.some((workspace) => workspace.online),
+          online: Boolean(connection),
           status:
             persistedEmployee?.status ||
             (Boolean(connection)
               ? "online"
-              : persistedWorkspaces.some((workspace) => workspace.online)
-                ? "online"
-                : "offline"),
+              : "offline"),
           currentTaskId: persistedEmployee?.currentTaskId || null,
           currentRunId: persistedEmployee?.currentRunId || null,
           lastSummary: persistedEmployee?.lastSummary || null,

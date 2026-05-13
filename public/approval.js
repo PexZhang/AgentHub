@@ -338,9 +338,9 @@ function renderApprovalView(approval, task, agent) {
 
   if (!approval) {
     approvalTitle.textContent = "没有找到待确认事项";
-    approvalSubtitle.textContent = "当前链接没有定位到有效审批，请返回任务页重新确认。";
+    approvalSubtitle.textContent = "这条确认可能已经处理完，或者还没同步过来。";
     approvalBody.textContent = "这条审批可能已经处理完成，或者还没有同步到当前快照。";
-    approvalImpact.textContent = "建议先回到任务页，再决定是否需要重新发起审批。";
+    approvalImpact.textContent = "建议回到 AI 经理，让它重新定位需要你确认的事项。";
     approvalNoteInput.value = "";
     approvalNoteInput.disabled = true;
     approvalApproveButton.disabled = true;
@@ -353,14 +353,14 @@ function renderApprovalView(approval, task, agent) {
     const pending = approval.status === "pending";
 
     approvalTitle.textContent = approval.requestedAction || "确认方案";
-    approvalSubtitle.textContent = `${agentName} 于 ${requestedAt} 发起，当前状态：${statusText}。`;
+    approvalSubtitle.textContent = `${agentName} · ${requestedAt} · ${statusText}`;
     approvalBody.textContent = approval.reason || "当前没有额外的审批说明。";
     approvalImpact.textContent =
       approval.scope ||
       approval.resolutionNote ||
       (task?.title
-        ? `这个确认会直接影响任务“${task.title}”是否继续推进。`
-        : "这个确认会直接影响对应任务是否继续推进。");
+        ? `影响任务：${task.title}`
+        : "这个确认会影响对应任务是否继续推进。");
 
     approvalNoteInput.disabled = !pending;
     approvalApproveButton.disabled = !pending || state.ui.pendingApprovalId === approval.id;

@@ -112,6 +112,18 @@ function formatFileSize(bytes) {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function compactResourceName(value) {
+  const text = String(value || "").trim();
+  if (text.length <= 18) {
+    return text;
+  }
+
+  const dotIndex = text.lastIndexOf(".");
+  const suffix = dotIndex > 0 ? text.slice(dotIndex) : "";
+  const headLength = Math.max(10, 18 - suffix.length - 3);
+  return `${text.slice(0, headLength)}...${suffix}`;
+}
+
 function updateViewportHeight() {
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
   document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
@@ -386,14 +398,7 @@ function renderStatusBadges(resource) {
   if (resource?.workspaceName) {
     badges.push({
       tone: "idle",
-      label: `工作区 ${resource.workspaceName}`,
-    });
-  }
-
-  if (resource?.primaryTaskTitle) {
-    badges.push({
-      tone: "idle",
-      label: `任务 ${resource.primaryTaskTitle}`,
+      label: resource.workspaceName,
     });
   }
 
@@ -421,16 +426,17 @@ function renderActions(resource) {
     return;
   }
 
-  const taskHref = buildTaskHref(resource);
   const directHref = buildDirectHref(resource);
+  const taskHref = buildTaskHref(resource);
 
   resourceActions.innerHTML = `
     <article class="task-jump-card">
       <div class="task-jump-copy">
-        <strong>切换资源摘录视角</strong>
-        <p>先看头部和尾部，再决定是否回到任务页或直连员工继续追问。</p>
+        <strong>下一步</strong>
+        <p>需要继续分析这份内容时，直接回到员工会话里追问。</p>
       </div>
       <div class="actions resource-actions-row">
+        ${directHref ? `<a class="primary-btn" href="${escapeHtml(directHref)}">回到会话</a>` : ""}
         <button
           type="button"
           class="ghost-btn"
@@ -447,8 +453,7 @@ function renderActions(resource) {
         >
           查看尾部
         </button>
-        ${taskHref ? `<a class="ghost-btn" href="${escapeHtml(taskHref)}">查看任务</a>` : ""}
-        ${directHref ? `<a class="primary-btn" href="${escapeHtml(directHref)}">去聊天</a>` : ""}
+        ${taskHref ? `<a class="ghost-btn" href="${escapeHtml(taskHref)}">会话入口</a>` : ""}
       </div>
     </article>
   `;
@@ -488,10 +493,10 @@ function renderResourceView() {
   resourcePageSubtitle.textContent = `${resource.primaryAgentName || route.agentName || "未分配员工"} · ${
     route.deviceName || "当前设备"
   }`;
-  resourceTitle.textContent = resource.name || "未命名资源";
-  resourceSubtitle.textContent = `资源最后更新于 ${formatDateTime(
-    resource.updatedAt
-  )}，先看清状态和关联任务，再决定怎么继续处理。`;
+  resourceTitle.textContent = compactResourceName(resource.name || "未命名资源");
+  resourceSubtitle.textContent = `${
+    resource.primaryAgentName || route.agentName || "数字员工"
+  } 上传或引用了这份内容。`;
   resourceStatusBadges.innerHTML = renderStatusBadges(resource);
 
   const metaItems = [
