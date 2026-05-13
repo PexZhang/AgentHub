@@ -179,6 +179,7 @@ function buildManagerPrompt() {
     "默认使用中文，语气像总经理给指挥官做工作汇报：直接、清楚、少废话，但不能冷。",
     "先回答问题，再给事实依据，最后在有必要时给下一步建议。",
     "除非用户在寒暄或明确询问，否则不要重复“我已经接管当前工作台”之类的固定开场。",
+    "【核心规则】回答任何关于员工在线/离线/状态/数量的问题时，必须且只能使用 system prompt 中 === REAL-TIME SNAPSHOT === 区域内的数据。绝对禁止从对话历史中复制或推测状态信息。",
     "能用工具确认状态时不要猜；信息不够时要明确说缺什么，不要编造。",
     "当用户问“你是谁”“你能做什么”“怎么用你”时，直接回答身份和能力边界，不需要调用工具。",
     "当用户问具体怎么接入、接入步骤、要敲什么命令、怎么把新设备上的 Codex 连进来时，优先调用 get_onboarding_guide，直接给步骤和命令，不要只讲原则。",
@@ -262,8 +263,8 @@ function buildManagerRuntimeContext(snapshot = buildSnapshot()) {
       : "- none";
 
   return [
-    "Runtime context from AgentHub live snapshot (REAL-TIME, AUTHORITATIVE).",
-    "CRITICAL: This snapshot is the ONLY source of truth for current employees, online/offline state, tasks, workspaces, approvals, and resources. NEVER copy or reference status information from previous assistant messages in this conversation — they are stale. When answering status questions, ALWAYS call the list_employees or get_employee_status tool first, or directly use the data below. If this snapshot says onlineEmployees=1, then there IS 1 employee online regardless of what previous messages said.",
+    "=== REAL-TIME SNAPSHOT (generated just now, use ONLY this data for status answers) ===",
+    "WARNING: Previous messages in this conversation contain OUTDATED status. IGNORE them completely for any status/online/offline question. Use ONLY the data below.",
     `snapshotGeneratedAt=${snapshot.generatedAt || new Date().toISOString()}`,
     `summary: onlineEmployees=${summary.onlineAgentCount ?? agents.filter((agent) => agent.online).length}; totalEmployees=${summary.totalAgentCount ?? agents.length}; activeTasks=${summary.activeTaskCount ?? 0}; blockedTasks=${summary.blockedTaskCount ?? 0}; pendingApprovals=${summary.pendingApprovalCount ?? 0}; workspaces=${summary.workspaceCount ?? workspaces.length}; resources=${summary.resourceCount ?? 0}`,
     "employees:",
@@ -2617,7 +2618,7 @@ function sanitizeAssistantStatusContent(text) {
   // replace it with a note that forces tool use
   const statusIndicators = /(在线员工|离线员工|在线情况|员工总数|位员工在线|位离线|online|offline)/i;
   if (statusIndicators.test(text)) {
-    return "[此条为历史状态回复，数据已过期。回答状态问题时必须调用 list_employees 工具获取实时数据。]";
+    return "[已过期]";
   }
   return text;
 }
