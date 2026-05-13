@@ -2590,37 +2590,38 @@ async function createOpenAIManagerResponse(input, previousResponseId = null) {
 
 function buildManagerChatHistory() {
   const MAX_HISTORY_MESSAGES = 10;
+  const statusIndicators = /(在线员工|离线员工|在线情况|员工总数|位员工在线|位离线|online|offline|在线|离线)/i;
+
   const allMessages = store
     .listManagerMessages()
     .filter((message) => ["user", "assistant"].includes(message.role) && normalizeText(message.text))
     .map((message) => ({
       role: message.role,
-      content:
-        message.role === "assistant"
-          ? sanitizeAssistantStatusContent(normalizeText(message.text))
-          : normalizeText(message.text),
+      content: normalizeText(message.text),
     }));
 
+  // Remove message pairs where assistant replied with stale status data.
+  // This prevents the model from copying old status answers.
+  const filtered = [];
+  for (let i = 0; i < allMessages.length; i++) {
+    const msg = allMessages[i];
+    if (msg.role === "assistant" && statusIndicators.test(msg.content)) {
+      // Skip this assistant message AND the preceding user message if it exists
+      if (filtered.length > 0 && filtered[filtered.length - 1].role === "user") {
+        filtered.pop();
+      }
+      continue;
+    }
+    filtered.push(msg);
+  }
+
   // Only keep recent messages to avoid stale context confusing the model
-  const recentMessages = allMessages.slice(-MAX_HISTORY_MESSAGES);
+  const recentMessages = filtered.slice(-MAX_HISTORY_MESSAGES);
 
   return [
     { role: "system", content: buildManagerInstructions() },
     ...recentMessages,
   ];
-}
-
-// Strip online/offline status details from historical assistant messages
-// to prevent model from copying stale status data instead of calling tools.
-function sanitizeAssistantStatusContent(text) {
-  if (!text) return text;
-  // If the message looks like a status report (contains online/offline indicators),
-  // replace it with a note that forces tool use
-  const statusIndicators = /(在线员工|离线员工|在线情况|员工总数|位员工在线|位离线|online|offline)/i;
-  if (statusIndicators.test(text)) {
-    return "[已过期]";
-  }
-  return text;
 }
 
 async function createCompatibleChatManagerResponse(messages) {
