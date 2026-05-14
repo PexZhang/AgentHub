@@ -900,6 +900,53 @@ function escapeHtml(text) {
     .replaceAll('"', "&quot;");
 }
 
+// Collapse long messages: show first N lines with a toggle button.
+// Thresholds: > MAX_LINES lines or > MAX_CHARS characters.
+const MSG_COLLAPSE_MAX_LINES = 20;
+const MSG_COLLAPSE_MAX_CHARS = 800;
+const MSG_COLLAPSE_PREVIEW_LINES = 8;
+
+function renderCollapsibleText(text) {
+  const escaped = escapeHtml(text);
+  const lines = escaped.split("\n");
+  const charCount = text.length;
+
+  if (lines.length <= MSG_COLLAPSE_MAX_LINES && charCount <= MSG_COLLAPSE_MAX_CHARS) {
+    return `<p>${escaped.replaceAll("\n", "<br />")}</p>`;
+  }
+
+  const previewLines = lines.slice(0, MSG_COLLAPSE_PREVIEW_LINES);
+  const previewHtml = previewLines.join("<br />");
+  const fullHtml = escaped.replaceAll("\n", "<br />");
+  const collapsedId = "msg-col-" + Math.random().toString(36).slice(2, 10);
+
+  return `
+    <div class="collapsible-msg" id="${collapsedId}">
+      <p class="collapsible-preview">${previewHtml}<br /><span class="collapse-fade"></span></p>
+      <p class="collapsible-full" style="display:none">${fullHtml}</p>
+      <button class="collapse-toggle" onclick="toggleCollapseMsg('${collapsedId}')">展开全文 (${lines.length} 行)</button>
+    </div>
+  `;
+}
+
+function toggleCollapseMsg(id) {
+  const container = document.getElementById(id);
+  if (!container) return;
+  const preview = container.querySelector(".collapsible-preview");
+  const full = container.querySelector(".collapsible-full");
+  const btn = container.querySelector(".collapse-toggle");
+  if (full.style.display === "none") {
+    preview.style.display = "none";
+    full.style.display = "";
+    btn.textContent = "收起";
+  } else {
+    preview.style.display = "";
+    full.style.display = "none";
+    const lineCount = (full.innerHTML.match(/<br\s*\/?>/gi) || []).length + 1;
+    btn.textContent = `展开全文 (${lineCount} 行)`;
+  }
+}
+
 function renderMessageAttachments(
   attachments,
   { conversation = null, agent = null, task = null, deviceName = "" } = {}
@@ -1708,7 +1755,7 @@ function renderManagerPanel() {
         return `
           <article class="message ${roleClass}">
             <div class="bubble">
-              <p>${escapeHtml(message.text).replaceAll("\n", "<br />")}</p>
+              ${renderCollapsibleText(message.text)}
             </div>
             <div class="meta">
               <span>${formatTime(message.createdAt)}</span>
@@ -2536,7 +2583,7 @@ function renderMessages() {
       return `
         <article class="message ${roleClass}">
           <div class="bubble">
-            <p>${escapeHtml(message.text).replaceAll("\n", "<br />")}</p>
+            ${renderCollapsibleText(message.text)}
             ${attachmentMarkup}
           </div>
           <div class="meta">

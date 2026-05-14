@@ -801,6 +801,44 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
   overflow-wrap: anywhere;
 }
 
+/* --- Collapsible long messages --- */
+.collapsible-msg {
+  position: relative;
+}
+
+.collapsible-msg .collapsible-preview {
+  position: relative;
+}
+
+.collapsible-msg .collapse-fade {
+  display: block;
+  height: 2.4em;
+  background: linear-gradient(to bottom, transparent, var(--surface-strong));
+  pointer-events: none;
+  margin-top: -2.4em;
+}
+
+.message.user .collapsible-msg .collapse-fade {
+  background: linear-gradient(to bottom, transparent, #f4f4f6);
+}
+
+.collapsible-msg .collapse-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  color: var(--accent);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.collapsible-msg .collapse-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 .meta {
   display: inline-flex;
   flex-wrap: wrap;
