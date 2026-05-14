@@ -973,14 +973,8 @@ function toggleCollapseMsg(id) {
 function renderErrorNote(text) {
   const errId = "err-" + Math.random().toString(36).slice(2, 10);
   return `
-    <div class="message-note error error-truncated" id="${errId}">
+    <div class="message-note error error-truncated" id="${errId}" onclick="copyErrorText('${errId}')" title="点击复制错误信息">
       <p class="error-text">${escapeHtml(text).replaceAll("\n", "<br />")}</p>
-      <button type="button" class="error-copy-btn" onclick="copyErrorText('${errId}')" aria-label="复制错误信息" title="复制错误信息">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
-        </svg>
-      </button>
     </div>
   `;
 }
@@ -989,7 +983,6 @@ async function copyErrorText(errId) {
   const container = document.getElementById(errId);
   if (!container) return;
   const textEl = container.querySelector(".error-text");
-  const btn = container.querySelector(".error-copy-btn");
   const text = textEl ? textEl.textContent : "";
   try {
     if (navigator.clipboard?.writeText) {
@@ -1003,10 +996,8 @@ async function copyErrorText(errId) {
       document.execCommand("copy");
       ta.remove();
     }
-    btn.innerHTML = "✓";
-    setTimeout(() => {
-      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>`;
-    }, 1200);
+    container.classList.add("copied");
+    setTimeout(() => container.classList.remove("copied"), 1500);
   } catch {
     // silent fail
   }
