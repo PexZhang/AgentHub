@@ -804,10 +804,24 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
 /* --- Collapsible long messages --- */
 .collapsible-msg {
   position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.collapsible-msg p {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.62;
 }
 
 .collapsible-msg .collapsible-preview {
   position: relative;
+}
+
+.collapsible-msg .collapsible-full {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .collapsible-msg .collapse-fade {
