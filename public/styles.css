@@ -836,6 +836,10 @@ body.direct-home .direct-overlay-top .message-toolbar-pill {
   background: linear-gradient(to bottom, transparent, #f4f4f6);
 }
 
+.message-note .collapsible-msg .collapse-fade {
+  background: linear-gradient(to bottom, transparent, var(--bg));
+}
+
 .collapsible-msg .collapse-toggle {
   display: inline-block;
   margin-top: 6px;

@@ -1769,7 +1769,7 @@ function renderManagerPanel() {
         const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
         const errorMarkup =
           message.role === "user" && message.errorMessage
-            ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
+            ? `<div class="message-note error">${renderCollapsibleText(message.errorMessage)}</div>`
             : "";
         const actionMarkup =
           message.role === "assistant" ? renderManagerActionCard(message.action) : "";
@@ -2594,7 +2594,7 @@ function renderMessages() {
       const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
       const errorMessage =
         message.role === "user" && message.errorMessage
-          ? `<div class="message-note error">${escapeHtml(message.errorMessage)}</div>`
+          ? `<div class="message-note error">${renderCollapsibleText(message.errorMessage)}</div>`
           : "";
       const attachmentMarkup = renderMessageAttachments(message.attachments, {
         conversation,
