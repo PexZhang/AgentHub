@@ -906,6 +906,8 @@ const MSG_COLLAPSE_MAX_LINES = 20;
 const MSG_COLLAPSE_MAX_CHARS = 800;
 const MSG_COLLAPSE_PREVIEW_LINES = 8;
 
+const MSG_COLLAPSE_PREVIEW_CHARS = 400;
+
 function renderCollapsibleText(text) {
   const escaped = escapeHtml(text);
   const lines = escaped.split("\n");
@@ -915,16 +917,27 @@ function renderCollapsibleText(text) {
     return `<p>${escaped.replaceAll("\n", "<br />")}</p>`;
   }
 
-  const previewLines = lines.slice(0, MSG_COLLAPSE_PREVIEW_LINES);
-  const previewHtml = previewLines.join("<br />");
   const fullHtml = escaped.replaceAll("\n", "<br />");
   const collapsedId = "msg-col-" + Math.random().toString(36).slice(2, 10);
+
+  // Build preview: use line-based truncation if multi-line, char-based if single long line
+  let previewHtml;
+  let sizeLabel;
+  if (lines.length > MSG_COLLAPSE_MAX_LINES) {
+    previewHtml = lines.slice(0, MSG_COLLAPSE_PREVIEW_LINES).join("<br />");
+    sizeLabel = `${lines.length} 行`;
+  } else {
+    // Single or few lines but very long text — truncate by chars
+    previewHtml = escapeHtml(text.slice(0, MSG_COLLAPSE_PREVIEW_CHARS)) + "…";
+    const kb = (charCount / 1024).toFixed(1);
+    sizeLabel = charCount > 1024 ? `${kb} KB` : `${charCount} 字符`;
+  }
 
   return `
     <div class="collapsible-msg" id="${collapsedId}">
       <p class="collapsible-preview">${previewHtml}<br /><span class="collapse-fade"></span></p>
       <p class="collapsible-full" style="display:none">${fullHtml}</p>
-      <button class="collapse-toggle" onclick="toggleCollapseMsg('${collapsedId}')">展开全文 (${lines.length} 行)</button>
+      <button class="collapse-toggle" onclick="toggleCollapseMsg('${collapsedId}')">展开全文 (${sizeLabel})</button>
     </div>
   `;
 }
@@ -942,8 +955,17 @@ function toggleCollapseMsg(id) {
   } else {
     preview.style.display = "";
     full.style.display = "none";
+    // Restore the original label with size info
     const lineCount = (full.innerHTML.match(/<br\s*\/?>/gi) || []).length + 1;
-    btn.textContent = `展开全文 (${lineCount} 行)`;
+    const charCount = full.textContent.length;
+    let sizeLabel;
+    if (lineCount > MSG_COLLAPSE_MAX_LINES) {
+      sizeLabel = `${lineCount} 行`;
+    } else {
+      const kb = (charCount / 1024).toFixed(1);
+      sizeLabel = charCount > 1024 ? `${kb} KB` : `${charCount} 字符`;
+    }
+    btn.textContent = `展开全文 (${sizeLabel})`;
   }
 }
 
