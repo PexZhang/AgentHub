@@ -539,6 +539,78 @@ function broadcastSnapshot() {
   }
 }
 
+// --- Session message fetching ---
+// Request an agent to read a local Codex session file and return recent messages.
+// The agent replies with session_messages_result which we handle in the WS message handler.
+const pendingSessionMessageRequests = new Map();
+
+function requestSessionMessages({
+  agentConnection,
+  conversationId,
+  codexSessionId,
+  codexHome,
+  limit = 50,
+}) {
+  const requestId = randomUUID();
+  pendingSessionMessageRequests.set(requestId, { conversationId, codexSessionId });
+
+  // Auto-cleanup after timeout
+  setTimeout(() => {
+    pendingSessionMessageRequests.delete(requestId);
+  }, 30_000);
+
+  sendJson(agentConnection.socket, {
+    type: "fetch_session_messages",
+    requestId,
+    conversationId,
+    codexSessionId,
+    codexHome,
+    limit,
+  });
+}
+
+async function handleSessionMessagesResult(payload) {
+  const requestId = normalizeText(payload.requestId);
+  const pending = pendingSessionMessageRequests.get(requestId);
+  if (!pending) return false;
+
+  pendingSessionMessageRequests.delete(requestId);
+
+  const { conversationId } = pending;
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+
+  if (messages.length === 0) {
+    if (payload.error) {
+      console.warn(`[SessionSync] ${payload.error}`);
+    }
+    return true;
+  }
+
+  const conversation = store.getConversation(conversationId);
+  if (!conversation) return true;
+
+  // Only populate if conversation still has no messages (avoid duplicates on re-open)
+  if (conversation.messages && conversation.messages.length > 0) return true;
+
+  // Insert messages into the conversation
+  for (const msg of messages) {
+    const role = msg.role === "assistant" ? "assistant" : "user";
+    await store.addMessage(conversationId, {
+      id: randomUUID(),
+      role,
+      text: typeof msg.text === "string" ? msg.text.slice(0, 8000) : "",
+      createdAt: msg.timestamp || new Date().toISOString(),
+      syncedFromSession: true,
+    });
+  }
+
+  console.log(
+    `[SessionSync] Synced ${messages.length} messages into conversation ${conversationId}`
+  );
+  broadcastSnapshot();
+  return true;
+}
+
 function resolveWorkspaceBinding(agentId, conversation) {
   const availableWorkspaces = store
     .listWorkspacesByEmployee(agentId)
@@ -4102,6 +4174,22 @@ wss.on("connection", (socket) => {
           conversationId: conversation.id,
           conversation,
         });
+
+        // If the conversation has no messages and is linked to a Codex session,
+        // request the agent to fetch recent messages from the local session file.
+        if (
+          agentConnection &&
+          conversation.codexSessionId &&
+          (!conversation.messages || conversation.messages.length === 0)
+        ) {
+          requestSessionMessages({
+            agentConnection,
+            conversationId: conversation.id,
+            codexSessionId: conversation.codexSessionId,
+            codexHome: conversation.codexHome || codexHome || null,
+            limit: Number(payload.sessionMessageLimit) || 50,
+          });
+        }
         return;
       }
 
@@ -4333,6 +4421,12 @@ wss.on("connection", (socket) => {
           message: "干预指令已发送",
         });
         broadcastSnapshot();
+        return;
+      }
+
+      // Handle session messages returned by an agent
+      if (payload.type === "session_messages_result" && socket.clientRole === "agent") {
+        handleSessionMessagesResult(payload);
         return;
       }
 

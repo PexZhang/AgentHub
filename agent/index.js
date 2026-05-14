@@ -758,6 +758,143 @@ function stopHeartbeat() {
   }
 }
 
+// Handle fetch_session_messages: read a local Codex session file and extract
+// the most recent N user/assistant messages for display on remote clients.
+async function handleFetchSessionMessages(payload) {
+  const requestId = normalizeText(payload.requestId);
+  const codexSessionId = normalizeText(payload.codexSessionId);
+  const codexHome = normalizeText(payload.codexHome);
+  const limit = Math.min(Math.max(Number(payload.limit) || 50, 1), 200);
+  const conversationId = normalizeText(payload.conversationId);
+
+  if (!codexSessionId || !requestId) {
+    return;
+  }
+
+  try {
+    const filePath = await findSessionFile(codexSessionId, codexHome);
+    if (!filePath) {
+      sendJson(currentWs, {
+        type: "session_messages_result",
+        requestId,
+        conversationId,
+        codexSessionId,
+        messages: [],
+        error: `未找到 session 文件: ${codexSessionId}`,
+      });
+      return;
+    }
+
+    const messages = await parseSessionMessages(filePath, limit);
+    sendJson(currentWs, {
+      type: "session_messages_result",
+      requestId,
+      conversationId,
+      codexSessionId,
+      messages,
+    });
+  } catch (error) {
+    sendJson(currentWs, {
+      type: "session_messages_result",
+      requestId,
+      conversationId,
+      codexSessionId,
+      messages: [],
+      error: error.message,
+    });
+  }
+}
+
+// Find the .jsonl file for a given Codex session ID
+async function findSessionFile(sessionId, preferredHome) {
+  const homes = getCodexSessionHomes();
+  // Put preferred home first
+  if (preferredHome) {
+    const resolved = resolve(preferredHome);
+    const idx = homes.indexOf(resolved);
+    if (idx > 0) {
+      homes.splice(idx, 1);
+      homes.unshift(resolved);
+    } else if (idx < 0) {
+      homes.unshift(resolved);
+    }
+  }
+
+  for (const home of homes) {
+    const sessionsDir = join(home, "sessions");
+    try {
+      const entries = await fs.readdir(sessionsDir, { recursive: true, withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
+          return join(entry.parentPath || entry.path || sessionsDir, entry.name);
+        }
+      }
+    } catch {
+      // directory doesn't exist, skip
+    }
+  }
+
+  return null;
+}
+
+// Parse a Codex session .jsonl file and extract the last N user/assistant messages.
+// We look for:
+//   - user messages: event_msg with payload.type=user_message (the canonical user input)
+//   - assistant messages: response_item with payload.role=assistant and output_text content
+// Developer/system messages and function calls are skipped.
+async function parseSessionMessages(filePath, limit) {
+  const raw = await fs.readFile(filePath, "utf8");
+  const lines = raw.split("\n");
+  const allMessages = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let entry;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+
+    const type = entry.type || "";
+    const payload = entry.payload || {};
+    const payloadType = payload.type || "";
+    const role = payload.role || "";
+    const timestamp = entry.timestamp || "";
+
+    // User message (canonical form from Codex CLI)
+    if (type === "event_msg" && payloadType === "user_message") {
+      const text = typeof payload.message === "string" ? payload.message : "";
+      if (text.trim()) {
+        allMessages.push({
+          role: "user",
+          text: text.slice(0, 8000),
+          timestamp,
+        });
+      }
+      continue;
+    }
+
+    // Assistant message
+    if (type === "response_item" && payloadType === "message" && role === "assistant") {
+      const text = extractTextContent(payload.content);
+      if (text.trim()) {
+        allMessages.push({
+          role: "assistant",
+          text: text.slice(0, 8000),
+          timestamp,
+        });
+      }
+      continue;
+    }
+  }
+
+  // Return the last N messages
+  return allMessages.slice(-limit);
+}
+
 // Handle manager_query: the Hub delegates an AI Manager request to this agent.
 // We build a synthetic conversation with the manager's system prompt + runtime context,
 // then invoke the runtime adapter to generate a reply.
@@ -1022,6 +1159,12 @@ function connect() {
             }
           ));
         }
+        return;
+      }
+
+      // Handle fetch_session_messages: Hub requests recent messages from a local Codex session
+      if (payload.type === "fetch_session_messages") {
+        handleFetchSessionMessages(payload);
         return;
       }
 
