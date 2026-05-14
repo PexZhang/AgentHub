@@ -550,6 +550,7 @@ function requestSessionMessages({
   codexSessionId,
   codexHome,
   limit = 50,
+  afterTimestamp = null,
 }) {
   const requestId = randomUUID();
   pendingSessionMessageRequests.set(requestId, { conversationId, codexSessionId });
@@ -566,6 +567,7 @@ function requestSessionMessages({
     codexSessionId,
     codexHome,
     limit,
+    afterTimestamp,
   });
 }
 
@@ -589,23 +591,34 @@ async function handleSessionMessagesResult(payload) {
   const conversation = store.getConversation(conversationId);
   if (!conversation) return true;
 
-  // Only populate if conversation still has no messages (avoid duplicates on re-open)
-  if (conversation.messages && conversation.messages.length > 0) return true;
-
-  // Insert messages into the conversation
+  // Insert messages into the conversation (appends for incremental sync)
+  let addedCount = 0;
+  let latestTimestamp = null;
   for (const msg of messages) {
     const role = msg.role === "assistant" ? "assistant" : "user";
+    const ts = msg.timestamp || new Date().toISOString();
     await store.addMessage(conversationId, {
       id: randomUUID(),
       role,
       text: typeof msg.text === "string" ? msg.text.slice(0, 8000) : "",
-      createdAt: msg.timestamp || new Date().toISOString(),
+      createdAt: ts,
       syncedFromSession: true,
+    });
+    addedCount++;
+    if (!latestTimestamp || ts > latestTimestamp) {
+      latestTimestamp = ts;
+    }
+  }
+
+  // Record the sync watermark so we can do incremental sync next time
+  if (latestTimestamp) {
+    await store.updateConversation(conversationId, {
+      lastSessionSyncAt: latestTimestamp,
     });
   }
 
   console.log(
-    `[SessionSync] Synced ${messages.length} messages into conversation ${conversationId}`
+    `[SessionSync] Synced ${addedCount} messages into conversation ${conversationId}`
   );
   broadcastSnapshot();
   return true;
@@ -4175,20 +4188,29 @@ wss.on("connection", (socket) => {
           conversation,
         });
 
-        // If the conversation has no messages and is linked to a Codex session,
-        // request the agent to fetch recent messages from the local session file.
-        if (
-          agentConnection &&
-          conversation.codexSessionId &&
-          (!conversation.messages || conversation.messages.length === 0)
-        ) {
-          requestSessionMessages({
-            agentConnection,
-            conversationId: conversation.id,
-            codexSessionId: conversation.codexSessionId,
-            codexHome: conversation.codexHome || codexHome || null,
-            limit: Number(payload.sessionMessageLimit) || 50,
-          });
+        // Sync messages from local Codex session file if needed:
+        // - First open (no messages yet): full fetch of last N messages
+        // - Re-open with new activity: incremental fetch (only messages after last sync)
+        if (agentConnection && conversation.codexSessionId) {
+          const hasMessages = conversation.messages && conversation.messages.length > 0;
+          const lastSync = conversation.lastSessionSyncAt || null;
+          const sessionUpdated =
+            normalizeText(payload.codexSessionUpdatedAt) ||
+            conversation.codexSessionUpdatedAt ||
+            null;
+          const needsSync =
+            !hasMessages || (sessionUpdated && lastSync && sessionUpdated > lastSync);
+
+          if (needsSync) {
+            requestSessionMessages({
+              agentConnection,
+              conversationId: conversation.id,
+              codexSessionId: conversation.codexSessionId,
+              codexHome: conversation.codexHome || codexHome || null,
+              limit: Number(payload.sessionMessageLimit) || 50,
+              afterTimestamp: hasMessages ? lastSync : null,
+            });
+          }
         }
         return;
       }

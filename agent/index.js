@@ -766,6 +766,7 @@ async function handleFetchSessionMessages(payload) {
   const codexHome = normalizeText(payload.codexHome);
   const limit = Math.min(Math.max(Number(payload.limit) || 50, 1), 200);
   const conversationId = normalizeText(payload.conversationId);
+  const afterTimestamp = normalizeText(payload.afterTimestamp) || null;
 
   if (!codexSessionId || !requestId) {
     return;
@@ -785,7 +786,7 @@ async function handleFetchSessionMessages(payload) {
       return;
     }
 
-    const messages = await parseSessionMessages(filePath, limit);
+    const messages = await parseSessionMessages(filePath, limit, afterTimestamp);
     sendJson(currentWs, {
       type: "session_messages_result",
       requestId,
@@ -842,7 +843,7 @@ async function findSessionFile(sessionId, preferredHome) {
 //   - user messages: event_msg with payload.type=user_message (the canonical user input)
 //   - assistant messages: response_item with payload.role=assistant and output_text content
 // Developer/system messages and function calls are skipped.
-async function parseSessionMessages(filePath, limit) {
+async function parseSessionMessages(filePath, limit, afterTimestamp = null) {
   const raw = await fs.readFile(filePath, "utf8");
   const lines = raw.split("\n");
   const allMessages = [];
@@ -863,6 +864,11 @@ async function parseSessionMessages(filePath, limit) {
     const payloadType = payload.type || "";
     const role = payload.role || "";
     const timestamp = entry.timestamp || "";
+
+    // For incremental sync, skip messages at or before the watermark
+    if (afterTimestamp && timestamp && timestamp <= afterTimestamp) {
+      continue;
+    }
 
     // User message (canonical form from Codex CLI)
     if (type === "event_msg" && payloadType === "user_message") {
