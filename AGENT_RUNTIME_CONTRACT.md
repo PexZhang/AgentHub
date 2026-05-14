@@ -78,6 +78,52 @@ Recommended advanced operations:
 5. `listSessions`
 6. `openDirectConversation`
 
+## Session Message Sync Contract
+
+When a remote client opens a Codex session conversation, the Hub may ask the runtime to read the local session file and return recent messages for display.
+
+### Hub → Agent: `fetch_session_messages`
+
+```json
+{
+  "type": "fetch_session_messages",
+  "requestId": "uuid",
+  "conversationId": "uuid",
+  "codexSessionId": "session-uuid",
+  "codexHome": "/Users/zhangpeng/.codex",
+  "limit": 50,
+  "afterTimestamp": "2026-05-14T12:01:10.000Z"
+}
+```
+
+- `afterTimestamp` is `null` for full fetch, or an ISO timestamp for incremental sync (only return messages after this watermark)
+- `limit` caps the maximum number of messages returned (default 50, max 200)
+
+### Agent → Hub: `session_messages_result`
+
+```json
+{
+  "type": "session_messages_result",
+  "requestId": "uuid",
+  "conversationId": "uuid",
+  "codexSessionId": "session-uuid",
+  "messages": [
+    { "role": "user", "text": "帮我写一个 hello world", "timestamp": "2026-05-14T12:00:03.000Z" },
+    { "role": "assistant", "text": "好的，已创建 hello.py", "timestamp": "2026-05-14T12:00:10.000Z" }
+  ]
+}
+```
+
+On error, `messages` should be `[]` and an `error` string may be included.
+
+### Sync behavior
+
+- First open (conversation has no messages): Hub sends `afterTimestamp: null`, agent returns last N messages
+- Re-open with no new activity (`session.updatedAt <= conversation.lastSessionSyncAt`): Hub skips the request entirely
+- Re-open with new activity: Hub sends `afterTimestamp` set to `lastSessionSyncAt`, agent returns only newer messages
+
+The Hub records `lastSessionSyncAt` on the conversation after each successful sync to serve as the watermark for the next incremental fetch.
+
 ## Registration Contract
 
 When a runtime connects, it should register:

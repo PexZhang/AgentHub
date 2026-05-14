@@ -524,6 +524,23 @@ AgentHub 当前的产品模型是：
 - 导入历史 session 时，AgentHub 会为它打开独立会话
 - 工作目录跟着会话走，后续同一会话会继续使用这个目录
 
+### Session 消息同步
+
+当你在手机上点开一个 Codex session 对应的会话时，AgentHub 会自动从 A 设备的本地 session 文件里同步聊天记录：
+
+- **首次打开**：全量拉取最近 50 条 user/assistant 消息
+- **再次打开，session 没有新活动**：不同步，直接展示已有消息
+- **再次打开，session 有新消息**：增量拉取，只追加 `lastSessionSyncAt` 之后的新消息
+
+判断依据是 session 的 `updatedAt`（Agent 通过心跳定期上报）和 conversation 上记录的同步水位线 `lastSessionSyncAt` 的比较。
+
+技术流程：
+
+1. 前端发 `open_codex_session` → Hub 创建/找到 conversation
+2. Hub 检测到需要同步 → 发 `fetch_session_messages` 给 Agent（可带 `afterTimestamp` 做增量）
+3. Agent 读取本地 `.jsonl` 文件，解析 `event_msg/user_message` 和 `response_item/role=assistant` 条目
+4. Agent 返回 `session_messages_result` → Hub 存入 conversation 并广播给前端
+
 ### 工作目录怎么选
 
 - 网页里的目录选择器浏览的是 `目标数字员工所在电脑` 上的目录
