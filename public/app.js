@@ -937,17 +937,20 @@ function renderCollapsibleText(text) {
     <div class="collapsible-msg" id="${collapsedId}">
       <p class="collapsible-preview">${previewHtml}<br /><span class="collapse-fade"></span></p>
       <p class="collapsible-full" style="display:none">${fullHtml}</p>
-      <button class="collapse-toggle" onclick="toggleCollapseMsg('${collapsedId}')">展开全文 (${sizeLabel})</button>
+      <button class="collapse-toggle" data-collapse-target="${collapsedId}">展开全文 (${sizeLabel})</button>
     </div>
   `;
 }
 
-function toggleCollapseMsg(id) {
+// Event delegation for collapsible message toggle
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-collapse-target]");
+  if (!btn) return;
+  const id = btn.dataset.collapseTarget;
   const container = document.getElementById(id);
   if (!container) return;
   const preview = container.querySelector(".collapsible-preview");
   const full = container.querySelector(".collapsible-full");
-  const btn = container.querySelector(".collapse-toggle");
   if (full.style.display === "none") {
     preview.style.display = "none";
     full.style.display = "";
@@ -955,7 +958,6 @@ function toggleCollapseMsg(id) {
   } else {
     preview.style.display = "";
     full.style.display = "none";
-    // Restore the original label with size info
     const lineCount = (full.innerHTML.match(/<br\s*\/?>/gi) || []).length + 1;
     const charCount = full.textContent.length;
     let sizeLabel;
@@ -967,41 +969,66 @@ function toggleCollapseMsg(id) {
     }
     btn.textContent = `展开全文 (${sizeLabel})`;
   }
-}
+});
 
 // Render error message: truncated with CSS ellipsis + a small copy icon.
 function renderErrorNote(text) {
   const errId = "err-" + Math.random().toString(36).slice(2, 10);
   return `
-    <div class="message-note error error-truncated" id="${errId}" onclick="copyErrorText('${errId}')" title="点击复制错误信息">
+    <div class="message-note error error-truncated" data-error-copy="${errId}">
       <p class="error-text">${escapeHtml(text).replaceAll("\n", "<br />")}</p>
     </div>
   `;
 }
 
-async function copyErrorText(errId) {
-  const container = document.getElementById(errId);
-  if (!container) return;
-  const textEl = container.querySelector(".error-text");
-  const text = textEl ? textEl.textContent : "";
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.cssText = "position:fixed;opacity:0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    container.classList.add("copied");
-    setTimeout(() => container.classList.remove("copied"), 1500);
-  } catch {
-    // silent fail
+// Toast helper — shows a brief message at the top of the screen
+function showToast(message, duration = 1800) {
+  let toastContainer = document.getElementById("toast-container");
+  if (!toastContainer) {
+    toastContainer = document.createElement("div");
+    toastContainer.id = "toast-container";
+    document.body.appendChild(toastContainer);
   }
+  const toast = document.createElement("div");
+  toast.className = "toast-msg";
+  toast.textContent = message;
+  toastContainer.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
 }
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;opacity:0;left:-9999px";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  document.execCommand("copy");
+  ta.remove();
+}
+
+// Event delegation for error-copy clicks (works in ES modules)
+document.addEventListener("click", async (e) => {
+  const el = e.target.closest("[data-error-copy]");
+  if (!el) return;
+  const textEl = el.querySelector(".error-text");
+  const text = textEl ? textEl.textContent : "";
+  if (!text) return;
+  try {
+    await copyToClipboard(text);
+    showToast("已复制错误信息");
+  } catch {
+    showToast("复制失败");
+  }
+});
 
 function renderMessageAttachments(
   attachments,
