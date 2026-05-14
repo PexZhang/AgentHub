@@ -969,6 +969,49 @@ function toggleCollapseMsg(id) {
   }
 }
 
+// Render error message: truncated with CSS ellipsis + a small copy icon.
+function renderErrorNote(text) {
+  const errId = "err-" + Math.random().toString(36).slice(2, 10);
+  return `
+    <div class="message-note error error-truncated" id="${errId}">
+      <p class="error-text">${escapeHtml(text).replaceAll("\n", "<br />")}</p>
+      <button type="button" class="error-copy-btn" onclick="copyErrorText('${errId}')" aria-label="复制错误信息" title="复制错误信息">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+        </svg>
+      </button>
+    </div>
+  `;
+}
+
+async function copyErrorText(errId) {
+  const container = document.getElementById(errId);
+  if (!container) return;
+  const textEl = container.querySelector(".error-text");
+  const btn = container.querySelector(".error-copy-btn");
+  const text = textEl ? textEl.textContent : "";
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;opacity:0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    btn.innerHTML = "✓";
+    setTimeout(() => {
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>`;
+    }, 1200);
+  } catch {
+    // silent fail
+  }
+}
+
 function renderMessageAttachments(
   attachments,
   { conversation = null, agent = null, task = null, deviceName = "" } = {}
@@ -1769,7 +1812,7 @@ function renderManagerPanel() {
         const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
         const errorMarkup =
           message.role === "user" && message.errorMessage
-            ? `<div class="message-note error">${renderCollapsibleText(message.errorMessage)}</div>`
+            ? renderErrorNote(message.errorMessage)
             : "";
         const actionMarkup =
           message.role === "assistant" ? renderManagerActionCard(message.action) : "";
@@ -2594,7 +2637,7 @@ function renderMessages() {
       const copyMarkup = message.text ? renderCopyMessageButton(message.id) : "";
       const errorMessage =
         message.role === "user" && message.errorMessage
-          ? `<div class="message-note error">${renderCollapsibleText(message.errorMessage)}</div>`
+          ? renderErrorNote(message.errorMessage)
           : "";
       const attachmentMarkup = renderMessageAttachments(message.attachments, {
         conversation,
