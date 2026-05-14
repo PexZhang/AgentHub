@@ -70,6 +70,11 @@ const MANAGER_REQUEST_TIMEOUT_MS = Math.max(
   3000,
   Number(process.env.MANAGER_REQUEST_TIMEOUT_MS || DEFAULT_MANAGER_REQUEST_TIMEOUT_MS)
 );
+const MANAGER_AGENT_ID = normalizeText(process.env.MANAGER_AGENT_ID);
+const MANAGER_AGENT_TIMEOUT_MS = Math.max(
+  5000,
+  Number(process.env.MANAGER_AGENT_TIMEOUT_MS || 60000)
+);
 const MANAGER_MAX_TOOL_LOOPS = 6;
 const SNAPSHOT_MANAGER_MESSAGE_LIMIT = Math.max(
   20,
@@ -100,6 +105,10 @@ function resolveManagerProvider() {
   const explicitProvider = normalizeText(process.env.MANAGER_PROVIDER).toLowerCase();
   if (explicitProvider) {
     return explicitProvider;
+  }
+
+  if (normalizeText(process.env.MANAGER_AGENT_ID)) {
+    return "agent";
   }
 
   if (
@@ -3362,7 +3371,131 @@ async function runLocalManager(text) {
   };
 }
 
+// --- Agent Provider for AI Manager ---
+// Delegates manager queries to a registered agent (e.g. a local Codex CLI agent).
+// The agent receives the user message along with real-time snapshot context
+// through a dedicated manager conversation, and its reply is returned synchronously.
+
+const pendingManagerAgentReplies = new Map();
+
+let managerAgentConversationId = null;
+
+async function getOrCreateManagerAgentConversation() {
+  if (managerAgentConversationId) {
+    const existing = store.getConversation(managerAgentConversationId);
+    if (existing) return existing;
+  }
+
+  // Search for existing manager agent conversation
+  const allConversations = store.listConversations();
+  const found = allConversations.find(
+    (c) => c.agentId === MANAGER_AGENT_ID && c.title === "AI Manager (Agent)"
+  );
+  if (found) {
+    managerAgentConversationId = found.id;
+    return found;
+  }
+
+  const conversation = await store.createConversation(MANAGER_AGENT_ID, {
+    title: "AI Manager (Agent)",
+  });
+  managerAgentConversationId = conversation.id;
+  return conversation;
+}
+
+async function runAgentManager(text) {
+  const agentConnection = agentClients.get(MANAGER_AGENT_ID);
+  if (!agentConnection) {
+    throw new Error(
+      `经理 Agent「${MANAGER_AGENT_ID}」当前不在线，无法处理请求。请确认该 Agent 已启动并连接到 Hub。`
+    );
+  }
+
+  const snapshot = buildSnapshot();
+  const runtimeContext = buildManagerRuntimeContext(snapshot);
+  const systemPrompt = buildManagerPrompt();
+
+  const conversation = await getOrCreateManagerAgentConversation();
+
+  const userMessage = {
+    id: randomUUID(),
+    role: "user",
+    text,
+    timestamp: new Date().toISOString(),
+  };
+
+  await store.addMessage(conversation.id, userMessage);
+
+  // Build the payload to send to the agent with full context
+  const managerPayload = {
+    type: "manager_query",
+    conversationId: conversation.id,
+    message: userMessage,
+    systemPrompt,
+    runtimeContext,
+    tools: managerToolRegistry.buildChatCompletionTools(),
+    conversation: store.getConversation(conversation.id),
+  };
+
+  // Set up a promise that resolves when the agent replies
+  const replyPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingManagerAgentReplies.delete(conversation.id);
+      reject(new Error(`经理 Agent「${MANAGER_AGENT_ID}」响应超时（${MANAGER_AGENT_TIMEOUT_MS}ms）。`));
+    }, MANAGER_AGENT_TIMEOUT_MS);
+
+    pendingManagerAgentReplies.set(conversation.id, { resolve, reject, timeout });
+  });
+
+  sendJson(agentConnection.socket, managerPayload);
+
+  const reply = await replyPromise;
+  const replyText = reply.text || "";
+  const toolCalls = Array.isArray(reply.toolCalls) ? reply.toolCalls : [];
+
+  // Execute tool calls from the agent and extract clientAction
+  let clientAction = null;
+  console.log(`[Agent Provider] Received ${toolCalls.length} tool calls:`, toolCalls.map(c => c.name));
+  for (const call of toolCalls) {
+    try {
+      const rawArgs = typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments || {});
+      const result = await executeManagerTool(call.name, rawArgs);
+      console.log(`[Agent Provider] Tool ${call.name} result:`, JSON.stringify(result?.clientAction || null));
+      if (!clientAction && result.clientAction) {
+        clientAction = result.clientAction;
+      }
+    } catch (err) {
+      console.error(`[Agent Provider] Tool ${call.name} failed:`, err.message);
+    }
+  }
+
+  return {
+    text: replyText,
+    action: clientAction,
+  };
+}
+
+function resolveManagerAgentReply(conversationId, { text, toolCalls }) {
+  const pending = pendingManagerAgentReplies.get(conversationId);
+  if (pending) {
+    clearTimeout(pending.timeout);
+    pendingManagerAgentReplies.delete(conversationId);
+    pending.resolve({ text, toolCalls });
+    return true;
+  }
+  return false;
+}
+
 async function runManager(text) {
+
+  if (MANAGER_PROVIDER === "agent") {
+    try {
+      return await runAgentManager(text);
+    } catch (error) {
+      console.error("[Manager Agent Error]", error.message, error.stack?.slice(0, 300));
+      throw new Error(describeManagerModelError(error));
+    }
+  }
 
   if (MANAGER_PROVIDER === "openai") {
     try {
@@ -4436,6 +4569,19 @@ wss.on("connection", (socket) => {
         const taskId = normalizeText(payload.taskId);
 
         if (!text || !conversationId || !agentId) {
+          return;
+        }
+
+        // If this is a reply from the manager agent, resolve the pending promise
+        const toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : [];
+        if (resolveManagerAgentReply(conversationId, { text, toolCalls })) {
+          // Store the assistant reply in the manager agent conversation
+          await store.addMessage(conversationId, {
+            id: randomUUID(),
+            role: "assistant",
+            text,
+            timestamp: new Date().toISOString(),
+          });
           return;
         }
 

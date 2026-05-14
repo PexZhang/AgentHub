@@ -1,4 +1,5 @@
 import { createCodexRuntime } from "./codex.js";
+import { createClaudeRuntime } from "./claude.js";
 import { createEchoRuntime } from "./echo.js";
 import { createOpenAIRuntime } from "./openai.js";
 
@@ -8,6 +9,7 @@ export function createRuntimeAdapter({
   systemPrompt,
   openaiApiKey,
   openaiModel,
+  claudeModel,
   codexBin,
   codexModel,
   codexSandbox,
@@ -18,6 +20,13 @@ export function createRuntimeAdapter({
   sleep,
   env,
 } = {}) {
+  if (mode === "claude") {
+    return createClaudeRuntime({
+      model: claudeModel || "claude-opus-4-6",
+      systemPrompt,
+    });
+  }
+
   if (mode === "openai" && openaiApiKey) {
     return createOpenAIRuntime({
       apiKey: openaiApiKey,

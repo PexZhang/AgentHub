@@ -72,6 +72,7 @@ const runtimeState = {
 };
 const availableRuntimes = [
   "echo",
+  "claude",
   ...(OPENAI_API_KEY ? ["openai"] : []),
   ...(CODEX_BIN ? ["codex"] : []),
 ].filter((value, index, all) => all.indexOf(value) === index);
@@ -675,6 +676,7 @@ const runtimeAdapter = createRuntimeAdapter({
   systemPrompt: AGENT_PROMPT,
   openaiApiKey: OPENAI_API_KEY,
   openaiModel: OPENAI_MODEL,
+  claudeModel: runtimeConfig.claudeModel || "claude-opus-4-6",
   codexBin: CODEX_BIN,
   codexModel: CODEX_MODEL,
   codexSandbox: CODEX_SANDBOX,
@@ -756,6 +758,146 @@ function stopHeartbeat() {
   }
 }
 
+// Handle manager_query: the Hub delegates an AI Manager request to this agent.
+// We build a synthetic conversation with the manager's system prompt + runtime context,
+// then invoke the runtime adapter to generate a reply.
+async function handleManagerQuery(payload) {
+  const conversationId = normalizeText(payload.conversationId);
+  const userText = normalizeText(payload.message?.text);
+
+  if (!conversationId || !userText) {
+    return;
+  }
+
+  const systemPrompt = normalizeText(payload.systemPrompt);
+  const runtimeContext = normalizeText(payload.runtimeContext);
+  const fullSystemPrompt = [systemPrompt, runtimeContext].filter(Boolean).join("\n\n");
+  const tools = Array.isArray(payload.tools) ? payload.tools : [];
+
+  // Build messages from conversation history
+  const historyMessages = (payload.conversation?.messages || []).slice(-10);
+  const claudeMessages = [];
+  for (const msg of historyMessages) {
+    if (msg.role === "assistant") {
+      claudeMessages.push({ role: "assistant", content: msg.text || "" });
+    } else if (msg.role === "user") {
+      claudeMessages.push({ role: "user", content: msg.text || "" });
+    }
+  }
+  // Ensure the latest user message is included
+  const lastMsg = claudeMessages[claudeMessages.length - 1];
+  if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== userText) {
+    claudeMessages.push({ role: "user", content: userText });
+  }
+
+  // Convert OpenAI-style tools to Claude tools format
+  const claudeTools = tools.map((t) => {
+    const fn = t.function || t;
+    return {
+      name: fn.name,
+      description: fn.description || "",
+      input_schema: fn.parameters || { type: "object", properties: {} },
+    };
+  });
+
+  // Resolve API credentials from env or MODELS_JSON
+  let CLAUDE_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+  let CLAUDE_BASE_URL = process.env.ANTHROPIC_BASE_URL || "";
+  if (!CLAUDE_API_KEY) {
+    try {
+      const models = JSON.parse(process.env.MODELS_JSON || "[]");
+      const entry = (Array.isArray(models) ? models : []).find(
+        (m) => m.provider === "anthropic" && m.apiKey
+      );
+      if (entry) {
+        CLAUDE_API_KEY = entry.apiKey;
+        CLAUDE_BASE_URL = CLAUDE_BASE_URL || entry.baseURL || "https://api.anthropic.com";
+      }
+    } catch {}
+  }
+  if (!CLAUDE_BASE_URL) CLAUDE_BASE_URL = "https://api.anthropic.com";
+  const CLAUDE_MODEL = runtimeConfig.claudeModel || "claude-opus-4-6";
+  const MAX_TOOL_LOOPS = 5;
+
+  try {
+    let messages = claudeMessages;
+    let finalText = "";
+    let toolCalls = [];
+
+    for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
+      const requestBody = {
+        model: CLAUDE_MODEL,
+        max_tokens: 4096,
+        system: fullSystemPrompt,
+        messages,
+      };
+      if (claudeTools.length > 0) {
+        requestBody.tools = claudeTools;
+      }
+      console.log(`[Manager] Calling Claude API with ${claudeTools.length} tools, ${messages.length} messages`);
+
+      const response = await fetch(`${CLAUDE_BASE_URL}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": CLAUDE_API_KEY,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Claude API failed: ${response.status} ${errorText}`);
+      }
+
+      const json = await response.json();
+      const content = json.content || [];
+      console.log(`[Manager] Claude stop_reason=${json.stop_reason}, content_types=${content.map(b => b.type).join(",")}`);
+
+      // Extract text blocks
+      const textBlocks = content.filter((b) => b.type === "text").map((b) => b.text);
+      if (textBlocks.length > 0) {
+        finalText = textBlocks.join("\n");
+      }
+
+      // Check for tool_use blocks
+      const toolUseBlocks = content.filter((b) => b.type === "tool_use");
+      if (toolUseBlocks.length === 0 || json.stop_reason !== "tool_use") {
+        // No tool calls, we're done
+        break;
+      }
+
+      // Collect tool calls to send back to Hub for execution
+      for (const block of toolUseBlocks) {
+        toolCalls.push({ name: block.name, arguments: block.input || {} });
+      }
+
+      // For tool execution, we need to send tool_calls to Hub and wait for results.
+      // But since we don't have a back-channel for that, we'll just report the tool calls
+      // and let Hub handle them. Break out of the loop.
+      break;
+    }
+
+    sendJson(currentWs, {
+      type: "agent_message",
+      conversationId,
+      agentId: AGENT_ID,
+      text: finalText || "收到",
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    });
+  } catch (error) {
+    sendJson(currentWs, {
+      type: "agent_message",
+      conversationId,
+      agentId: AGENT_ID,
+      text: `经理 Agent 处理失败：${error.message}`,
+    });
+  }
+}
+
+let currentWs = null;
+
 function connect() {
   // On macOS with system-wide proxy tooling enabled, the default HTTP/WebSocket
   // agent can be hijacked by local proxy software and cause EBADF on outbound
@@ -764,6 +906,7 @@ function connect() {
 
   ws.on("open", async () => {
     authFailed = false;
+    currentWs = ws;
     console.log(`Connected to hub: ${HUB_WS_URL}`);
     updateRuntimeState({
       status: "idle",
@@ -879,6 +1022,12 @@ function connect() {
             }
           ));
         }
+        return;
+      }
+
+      // Handle manager_query: AI Manager delegates to this agent
+      if (payload.type === "manager_query") {
+        handleManagerQuery(payload);
         return;
       }
 

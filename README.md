@@ -327,6 +327,19 @@ MANAGER_OPENAI_API_KEY=你的 OpenAI API Key
 MANAGER_MODEL=gpt-5.4-mini
 ```
 
+如果你希望由一个在线 Agent 来充当经理（Agent Provider 模式），可以设置：
+
+```env
+MANAGER_PROVIDER=agent
+MANAGER_AGENT_ID=sandbox-codex    # 充当经理的 Agent ID
+MANAGER_AGENT_TIMEOUT_MS=60000    # 经理 Agent 响应超时（默认 60s）
+```
+
+此模式下，Hub 不会自己调 LLM API，而是把经理请求（含 system prompt、tools、runtime context）
+通过 WebSocket 转发给指定的在线 Agent。Agent 端使用 Claude API with tool calling 生成回复，
+并将 tool calls 返回给 Hub 执行（如 `switch_to_employee_chat`、`assign_task_to_employee` 等），
+从而生成前端需要的 action 按钮。
+
 如果你把 AgentHub 部署到云服务器，并且前面放了 Nginx/Caddy 之类的反向代理，建议把 Hub 只绑定到回环地址，避免 `3000` 直接暴露到公网：
 
 ```env

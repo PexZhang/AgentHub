@@ -83,6 +83,7 @@ This is important because the UI and Hub should not care whether the worker behi
 The repository has already started this direction with:
 
 - `agent/providers/codex.js`
+- `agent/providers/claude.js` — Claude API with built-in tool calling (shell, file ops)
 - `agent/providers/openai.js`
 - `agent/providers/echo.js`
 - `agent/providers/index.js`
